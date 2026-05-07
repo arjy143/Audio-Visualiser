@@ -1,4 +1,5 @@
 #include "render/renderer.hpp"
+#include <algorithm>
 
 namespace render
 {
@@ -36,6 +37,7 @@ namespace render
             shader_->uniform("uFanMode"),
             shader_->uniform("uScale"),
             shader_->uniform("uAlpha"),
+            shader_->uniform("uBassEnergy"),
         };
 
         glGenVertexArrays(1, &vao_);
@@ -93,7 +95,19 @@ namespace render
         glUniform1f(uniforms_.max_db,    -10.0f);
         glUniform1f(uniforms_.min_freq,  20.0f);
         glUniform1f(uniforms_.max_freq,  24000.0f);
-        glUniform1f(uniforms_.time,      static_cast<float>(glfwGetTime()));
+        const float time = static_cast<float>(glfwGetTime());
+        glUniform1f(uniforms_.time, time);
+
+        // Average the lowest ~17 bins (20–200 Hz) for bass energy
+        constexpr int   k_bass_bins = 17;
+        constexpr float k_min_db    = -90.0f;
+        constexpr float k_max_db    = -10.0f;
+        float bass_sum = 0.0f;
+        for (int i = 0; i < k_bass_bins; ++i)
+            bass_sum += spectrum[static_cast<size_t>(i)];
+        const float bass_avg  = bass_sum / static_cast<float>(k_bass_bins);
+        const float bass_norm = std::clamp((bass_avg - k_min_db) / (k_max_db - k_min_db), 0.0f, 1.0f);
+        glUniform1f(uniforms_.bass_energy, bass_norm);
 
         constexpr int   k_symmetry = 6;
         constexpr float k_two_pi   = 2.0f * 3.14159265f;

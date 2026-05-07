@@ -24,7 +24,7 @@ class Renderer
     struct Uniforms
     {
         GLint bin_count, min_db, max_db, min_freq, max_freq;
-        GLint time, rotation, flip, fan_mode, scale, alpha;
+        GLint time, rotation, flip, fan_mode, scale, alpha, bass_energy;
     };
     Uniforms uniforms_{};
 
