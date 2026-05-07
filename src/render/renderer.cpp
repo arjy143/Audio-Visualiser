@@ -38,6 +38,7 @@ namespace render
             shader_->uniform("uScale"),
             shader_->uniform("uAlpha"),
             shader_->uniform("uBassEnergy"),
+            shader_->uniform("uBeatKick"),
         };
 
         glGenVertexArrays(1, &vao_);
@@ -106,9 +107,16 @@ namespace render
         float bass_sum = 0.0f;
         for (int i = 0; i < k_bass_bins; ++i)
             bass_sum += spectrum[static_cast<size_t>(i)];
-        const float bass_avg  = bass_sum / static_cast<float>(k_bass_bins);
-        const float bass_norm = std::clamp((bass_avg - k_min_db) / (k_max_db - k_min_db), 0.0f, 1.0f);
+        const float bass_avg_db = bass_sum / static_cast<float>(k_bass_bins);
+        const float bass_norm   = std::clamp((bass_avg_db - k_min_db) / (k_max_db - k_min_db), 0.0f, 1.0f);
         glUniform1f(uniforms_.bass_energy, bass_norm);
+
+        // Beat detection: spike above slow background average triggers a kick
+        bass_avg_  = bass_avg_  * 0.98f + bass_norm * 0.02f;  // ~50 frame window
+        beat_kick_ *= 0.88f;                                    // decay every frame
+        if (beat_kick_ < 0.5f && bass_norm > bass_avg_ * 1.5f && bass_avg_ > 0.05f)
+            beat_kick_ = 1.0f;
+        glUniform1f(uniforms_.beat_kick, beat_kick_);
 
         constexpr int   k_symmetry = 6;
         constexpr float k_two_pi   = 2.0f * 3.14159265f;

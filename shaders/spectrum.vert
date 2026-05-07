@@ -13,6 +13,7 @@ uniform float uFanMode;
 uniform float uScale;
 uniform float uTime;
 uniform float uBassEnergy;
+uniform float uBeatKick;
 
 out float vMagnitude;
 out float vFrequency;
@@ -34,7 +35,7 @@ void main()
 
     float normalised = clamp((magnitude - uMinDB) / (uMaxDB - uMinDB), 0.0, 1.0);
     float inner = 0.05 + uBassEnergy * 0.15;
-    float r = (inner + normalised * 0.82) * uScale;
+    float r = (inner + normalised * 0.82) * uScale * (1.0 + uBeatKick * 0.2);
 
     float a = (uFlip > 0.5 ? -angle : angle) + uRotation + uTime * 0.08;
     gl_Position = vec4(r * cos(a), r * sin(a), 0.0, 1.0);

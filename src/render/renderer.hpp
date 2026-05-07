@@ -24,9 +24,12 @@ class Renderer
     struct Uniforms
     {
         GLint bin_count, min_db, max_db, min_freq, max_freq;
-        GLint time, rotation, flip, fan_mode, scale, alpha, bass_energy;
+        GLint time, rotation, flip, fan_mode, scale, alpha, bass_energy, beat_kick;
     };
     Uniforms uniforms_{};
+
+    float bass_avg_{0.0f};   // slow EMA of bass level — the "background"
+    float beat_kick_{0.0f};  // 1.0 on a beat, decays to 0 each frame
 
 public:
     Renderer(dsp::Analyser& analyser, const char* title, int width, int height);
