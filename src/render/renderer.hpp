@@ -16,10 +16,17 @@ class Renderer
     GLuint vao_{0};
     GLuint vbo_{0};
 
-    //keep a null pointer initially and then construct in the body
     std::unique_ptr<ShaderProgram> shader_;
     Visualiser visualiser_;
     dsp::Analyser& analyser_;
+
+    // Uniform locations cached at startup — glGetUniformLocation is slow
+    struct Uniforms
+    {
+        GLint bin_count, min_db, max_db, min_freq, max_freq;
+        GLint time, rotation, flip, fan_mode, scale, alpha;
+    };
+    Uniforms uniforms_{};
 
 public:
     Renderer(dsp::Analyser& analyser, const char* title, int width, int height);

@@ -10,6 +10,7 @@ uniform float uMaxFreq;
 uniform float uRotation;
 uniform float uFlip;
 uniform float uFanMode;
+uniform float uScale;
 
 out float vMagnitude;
 
@@ -28,7 +29,7 @@ void main()
     float angle = t * 2.0 * 3.14159265;
 
     float normalised = clamp((magnitude - uMinDB) / (uMaxDB - uMinDB), 0.0, 1.0);
-    float r = 0.1 + normalised * 0.85;
+    float r = (0.05 + normalised * 0.92) * uScale;
 
     float a = (uFlip > 0.5 ? -angle : angle) + uRotation;
     gl_Position = vec4(r * cos(a), r * sin(a), 0.0, 1.0);

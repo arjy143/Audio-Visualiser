@@ -22,8 +22,21 @@ namespace render
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        //construct shaderprogram
         shader_ = std::make_unique<ShaderProgram>("shaders/spectrum.vert", "shaders/spectrum.frag");
+
+        uniforms_ = {
+            shader_->uniform("uBinCount"),
+            shader_->uniform("uMinDB"),
+            shader_->uniform("uMaxDB"),
+            shader_->uniform("uMinFreq"),
+            shader_->uniform("uMaxFreq"),
+            shader_->uniform("uTime"),
+            shader_->uniform("uRotation"),
+            shader_->uniform("uFlip"),
+            shader_->uniform("uFanMode"),
+            shader_->uniform("uScale"),
+            shader_->uniform("uAlpha"),
+        };
 
         glGenVertexArrays(1, &vao_);
         glGenBuffers(1, &vbo_);
@@ -71,42 +84,39 @@ namespace render
         //overwrite the existing gpu buffer in place
         glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(spectrum.size_bytes()), spectrum.data());
 
-        glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
+        glClearColor(0.0f, 0.0f, 0.02f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         shader_->bind();
 
-        //set uniforms
-        glUniform1i(shader_->uniform("uBinCount"), static_cast<int>(dsp::k_spectrum_bins));
-        glUniform1f(shader_->uniform("uMinDB"), -90.0f);
-        glUniform1f(shader_->uniform("uMaxDB"), 0.0f);
-        glUniform1f(shader_->uniform("uMinFreq"), 20.0f);
-        glUniform1f(shader_->uniform("uMaxFreq"), 24000.0f);
-
+        glUniform1i(uniforms_.bin_count, static_cast<int>(dsp::k_spectrum_bins));
+        glUniform1f(uniforms_.min_db,    -90.0f);
+        glUniform1f(uniforms_.max_db,    -10.0f);
+        glUniform1f(uniforms_.min_freq,  20.0f);
+        glUniform1f(uniforms_.max_freq,  24000.0f);
+        glUniform1f(uniforms_.time,      static_cast<float>(glfwGetTime()));
 
         constexpr int   k_symmetry = 6;
         constexpr float k_two_pi   = 2.0f * 3.14159265f;
         const GLsizei   k_bins     = static_cast<GLsizei>(dsp::k_spectrum_bins);
 
-        glUniform1f(shader_->uniform("uTime"), static_cast<float>(glfwGetTime()));
+        glUniform1f(uniforms_.scale, 1.0f);
 
         glBindVertexArray(vao_);
         for (int i = 0; i < k_symmetry; ++i)
         {
             const float rotation = k_two_pi * static_cast<float>(i) / static_cast<float>(k_symmetry);
-            glUniform1f(shader_->uniform("uRotation"), rotation);
+            glUniform1f(uniforms_.rotation, rotation);
 
             for (int flip = 0; flip < 2; ++flip)
             {
-                glUniform1f(shader_->uniform("uFlip"), static_cast<float>(flip));
+                glUniform1f(uniforms_.flip, static_cast<float>(flip));
 
-                // Semi-transparent filled shape
-                glUniform1f(shader_->uniform("uFanMode"), 1.0f);
-                glUniform1f(shader_->uniform("uAlpha"),   0.25f);
+                glUniform1f(uniforms_.fan_mode, 1.0f);
+                glUniform1f(uniforms_.alpha,    0.25f);
                 glDrawArrays(GL_TRIANGLE_FAN, 0, k_bins);
 
-                // Crisp outline on top
-                glUniform1f(shader_->uniform("uFanMode"), 0.0f);
-                glUniform1f(shader_->uniform("uAlpha"),   1.0f);
+                glUniform1f(uniforms_.fan_mode, 0.0f);
+                glUniform1f(uniforms_.alpha,    1.0f);
                 glDrawArrays(GL_LINE_LOOP, 0, k_bins);
             }
         }
