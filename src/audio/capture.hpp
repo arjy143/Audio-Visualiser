@@ -19,11 +19,11 @@ class Capture
 
     std::atomic<uint32_t> x_run_count_;
 
-    //pipewire calls this on real time thread
-    static void on_process(void* userdata) noexcept;
-
 public:
     explicit Capture(ring_buffer::RingBuffer<float, 65536>& ring_buffer);
+
+    //pipewire calls this on real time thread
+    static void on_process(void* userdata) noexcept;
 
     ~Capture();
 

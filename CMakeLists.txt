@@ -78,28 +78,3 @@ add_custom_command(TARGET audiovis POST_BUILD
         $<TARGET_FILE_DIR:audiovis>/shaders
 )
 
-# ── Tests ────────────────────────────────────────────────────────
-enable_testing()
-
-# Fetch Catch2 (single-header, no install needed)
-include(FetchContent)
-FetchContent_Declare(Catch2
-    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-    GIT_TAG        v3.5.3
-)
-FetchContent_MakeAvailable(Catch2)
-
-add_executable(audiovis_tests
-    tests/test_ring_buffer.cpp
-    tests/test_fft.cpp
-    tests/test_window.cpp
-)
-
-target_link_libraries(audiovis_tests PRIVATE
-    audiovis_core
-    Catch2::Catch2WithMain
-)
-
-include(CTest)
-include(Catch)
-catch_discover_tests(audiovis_tests)

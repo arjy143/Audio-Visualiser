@@ -66,7 +66,7 @@ namespace capture
             stream_,
             PW_DIRECTION_INPUT, //input goes to here
             PW_ID_ANY, //connect to any source
-            PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS,
+            static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS),
             params,
             1
         );
