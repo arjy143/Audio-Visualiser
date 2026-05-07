@@ -19,6 +19,9 @@ namespace render
 
         glewInit();
 
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
         //construct shaderprogram
         shader_ = std::make_unique<ShaderProgram>("shaders/spectrum.vert", "shaders/spectrum.frag");
 
@@ -80,9 +83,11 @@ namespace render
         glUniform1f(shader_->uniform("uMaxFreq"), 24000.0f);
 
 
-        //adding some symmetry
-        constexpr int k_symmetry = 6;
-        constexpr float k_two_pi = 2.0f * 3.14159265f;
+        constexpr int   k_symmetry = 6;
+        constexpr float k_two_pi   = 2.0f * 3.14159265f;
+        const GLsizei   k_bins     = static_cast<GLsizei>(dsp::k_spectrum_bins);
+
+        glUniform1f(shader_->uniform("uTime"), static_cast<float>(glfwGetTime()));
 
         glBindVertexArray(vao_);
         for (int i = 0; i < k_symmetry; ++i)
@@ -90,11 +95,20 @@ namespace render
             const float rotation = k_two_pi * static_cast<float>(i) / static_cast<float>(k_symmetry);
             glUniform1f(shader_->uniform("uRotation"), rotation);
 
-            glUniform1f(shader_->uniform("uFlip"), 0.0f);
-            glDrawArrays(GL_LINE_LOOP, 0, static_cast<GLsizei>(dsp::k_spectrum_bins));
+            for (int flip = 0; flip < 2; ++flip)
+            {
+                glUniform1f(shader_->uniform("uFlip"), static_cast<float>(flip));
 
-            glUniform1f(shader_->uniform("uFlip"), 1.0f);
-            glDrawArrays(GL_LINE_LOOP, 0, static_cast<GLsizei>(dsp::k_spectrum_bins));
+                // Semi-transparent filled shape
+                glUniform1f(shader_->uniform("uFanMode"), 1.0f);
+                glUniform1f(shader_->uniform("uAlpha"),   0.25f);
+                glDrawArrays(GL_TRIANGLE_FAN, 0, k_bins);
+
+                // Crisp outline on top
+                glUniform1f(shader_->uniform("uFanMode"), 0.0f);
+                glUniform1f(shader_->uniform("uAlpha"),   1.0f);
+                glDrawArrays(GL_LINE_LOOP, 0, k_bins);
+            }
         }
 
         glfwSwapBuffers(window_);
