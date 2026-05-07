@@ -15,6 +15,7 @@ uniform float uTime;
 uniform float uBassEnergy;
 
 out float vMagnitude;
+out float vFrequency;
 
 void main()
 {
@@ -23,6 +24,7 @@ void main()
     {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
         vMagnitude = 0.0;
+        vFrequency = 0.0;
         return;
     }
 
@@ -37,4 +39,5 @@ void main()
     float a = (uFlip > 0.5 ? -angle : angle) + uRotation + uTime * 0.08;
     gl_Position = vec4(r * cos(a), r * sin(a), 0.0, 1.0);
     vMagnitude = normalised;
+    vFrequency = t;
 }

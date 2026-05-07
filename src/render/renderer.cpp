@@ -90,18 +90,19 @@ namespace render
         glClear(GL_COLOR_BUFFER_BIT);
         shader_->bind();
 
+        constexpr float k_min_db = -90.0f;
+        constexpr float k_max_db = -25.0f;  // typical music peaks here
+
         glUniform1i(uniforms_.bin_count, static_cast<int>(dsp::k_spectrum_bins));
-        glUniform1f(uniforms_.min_db,    -90.0f);
-        glUniform1f(uniforms_.max_db,    -10.0f);
+        glUniform1f(uniforms_.min_db,    k_min_db);
+        glUniform1f(uniforms_.max_db,    k_max_db);
         glUniform1f(uniforms_.min_freq,  20.0f);
         glUniform1f(uniforms_.max_freq,  24000.0f);
         const float time = static_cast<float>(glfwGetTime());
         glUniform1f(uniforms_.time, time);
 
         // Average the lowest ~17 bins (20–200 Hz) for bass energy
-        constexpr int   k_bass_bins = 17;
-        constexpr float k_min_db    = -90.0f;
-        constexpr float k_max_db    = -10.0f;
+        constexpr int k_bass_bins = 17;
         float bass_sum = 0.0f;
         for (int i = 0; i < k_bass_bins; ++i)
             bass_sum += spectrum[static_cast<size_t>(i)];
