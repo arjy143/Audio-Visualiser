@@ -23,7 +23,7 @@ add_library(audiovis_core STATIC
 
 target_include_directories(audiovis_core
     PUBLIC  src/
-    PRIVATE ${PIPEWIRE_INCLUDE_DIRS}
+            ${PIPEWIRE_INCLUDE_DIRS}
 )
 
 target_compile_options(audiovis_core PRIVATE

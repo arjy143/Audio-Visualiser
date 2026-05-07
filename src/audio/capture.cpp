@@ -34,6 +34,7 @@ namespace capture
                 PW_KEY_MEDIA_TYPE, "Audio",
                 PW_KEY_MEDIA_CATEGORY, "Capture",
                 PW_KEY_MEDIA_ROLE, "DSP",
+                PW_KEY_STREAM_CAPTURE_SINK, "true",
                 nullptr
             ),
             &k_stream_events,

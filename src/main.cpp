@@ -10,7 +10,7 @@ int main()
     try
     {
         ring_buffer::RingBuffer<float, 65536> buffer;
-        capture::Capture{buffer};
+        capture::Capture capture{buffer};
         dsp::Analyser analyser{buffer};
         render::Renderer renderer{analyser, "Audio visualiser", 800, 600};
 
