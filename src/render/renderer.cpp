@@ -81,7 +81,7 @@ namespace render
 
 
         glBindVertexArray(vao_);
-        glDrawArrays(GL_LINE_STRIP, 0, static_cast<GLsizei>(dsp::k_spectrum_bins));
+        glDrawArrays(GL_LINE_LOOP, 0, static_cast<GLsizei>(dsp::k_spectrum_bins));
 
         glfwSwapBuffers(window_);
     }
