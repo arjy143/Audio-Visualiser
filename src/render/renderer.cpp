@@ -76,6 +76,8 @@ namespace render
         glUniform1i(shader_->uniform("uBinCount"), static_cast<int>(dsp::k_spectrum_bins));
         glUniform1f(shader_->uniform("uMinDB"), -90.0f);
         glUniform1f(shader_->uniform("uMaxDB"), 0.0f);
+        glUniform1f(shader_->uniform("uMinFreq"), 20.0f);
+        glUniform1f(shader_->uniform("uMaxFreq"), 24000.0f);
 
 
         glBindVertexArray(vao_);
