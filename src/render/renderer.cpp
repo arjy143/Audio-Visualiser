@@ -80,8 +80,22 @@ namespace render
         glUniform1f(shader_->uniform("uMaxFreq"), 24000.0f);
 
 
+        //adding some symmetry
+        constexpr int k_symmetry = 6;
+        constexpr float k_two_pi = 2.0f * 3.14159265f;
+
         glBindVertexArray(vao_);
-        glDrawArrays(GL_LINE_LOOP, 0, static_cast<GLsizei>(dsp::k_spectrum_bins));
+        for (int i = 0; i < k_symmetry; ++i)
+        {
+            const float rotation = k_two_pi * static_cast<float>(i) / static_cast<float>(k_symmetry);
+            glUniform1f(shader_->uniform("uRotation"), rotation);
+
+            glUniform1f(shader_->uniform("uFlip"), 0.0f);
+            glDrawArrays(GL_LINE_LOOP, 0, static_cast<GLsizei>(dsp::k_spectrum_bins));
+
+            glUniform1f(shader_->uniform("uFlip"), 1.0f);
+            glDrawArrays(GL_LINE_LOOP, 0, static_cast<GLsizei>(dsp::k_spectrum_bins));
+        }
 
         glfwSwapBuffers(window_);
     }

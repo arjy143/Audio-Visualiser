@@ -7,6 +7,8 @@ uniform float uMinDB;
 uniform float uMaxDB;
 uniform float uMinFreq;
 uniform float uMaxFreq;
+uniform float uRotation;
+uniform float uFlip;
 
 out float vMagnitude;
 
@@ -19,6 +21,7 @@ void main()
     float normalised = clamp((magnitude - uMinDB) / (uMaxDB - uMinDB), 0.0, 1.0);
     float r = 0.3 + normalised * 0.6;
 
-    gl_Position = vec4(r * cos(angle), r * sin(angle), 0.0, 1.0);
+    float a = (uFlip > 0.5 ? -angle : angle) + uRotation;
+    gl_Position = vec4(r * cos(a), r * sin(a), 0.0, 1.0);
     vMagnitude = normalised;
 }
