@@ -253,7 +253,7 @@ void Renderer::render() noexcept
     // Auto-advance every ~90 s, but only on a beat so the cut feels musical.
     // M key forces an immediate switch at any time.
     constexpr int k_mode_duration = 90 * 60;   // frames (~90 s at 60 fps)
-    constexpr int k_num_modes     = 4;
+    constexpr int k_num_modes     = 5;
 
     ++mode_frames_;
     const bool key_m     = glfwGetKey(window_, GLFW_KEY_M) == GLFW_PRESS;
@@ -359,6 +359,18 @@ void Renderer::render() noexcept
             glUniform1f(uniforms_.fan_mode, 3.0f);
             glBindVertexArray(vao_);
             draw_ring(GL_POINTS, k_bins, 2, 1.0f, 1.0f, 0.0f);
+            break;
+        }
+
+        case 4: // Circle — single unadorned ring, full spectrum once around
+        {
+            glUniform1f(uniforms_.fan_mode, 0.0f);
+            glUniform1f(uniforms_.scale,    1.0f);
+            glUniform1f(uniforms_.alpha,    1.0f);
+            glUniform1f(uniforms_.rotation, 0.0f);
+            glUniform1f(uniforms_.flip,     0.0f);
+            glBindVertexArray(vao_);
+            glDrawArrays(GL_LINE_LOOP, 0, k_bins);
             break;
         }
     }

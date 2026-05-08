@@ -20,6 +20,10 @@ namespace dsp
 
         ring_buffer_.pop(samples_.data(), k_FFT_size);
 
+        // Save raw samples before windowing so the scope can display the true waveform.
+        // The Hann window zeros out the edges which would create a misleading half-circle.
+        raw_samples_ = samples_;
+
         //apply hann window
         apply_window(k_hann_window.data(), samples_.data(), k_FFT_size);
 
@@ -44,5 +48,10 @@ namespace dsp
     std::span<const float> Analyser::spectrum() const noexcept
     {
         return std::span<const float>(smoothed_);
+    }
+
+    std::span<const float> Analyser::waveform() const noexcept
+    {
+        return std::span<const float>(raw_samples_);
     }
 }

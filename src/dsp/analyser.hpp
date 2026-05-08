@@ -17,8 +17,9 @@ class Analyser
 
     FFTPlan fft_;
 
-    std::array<float, k_FFT_size> samples_;
-    std::array<float,k_spectrum_bins> spectrum_;
+    std::array<float, k_FFT_size>      samples_;
+    std::array<float, k_FFT_size>      raw_samples_;   // pre-window copy for scope display
+    std::array<float, k_spectrum_bins> spectrum_;
     std::array<float, k_spectrum_bins> smoothed_;
 
 
@@ -31,6 +32,7 @@ public:
     //renderer will use this to get the latest smoothed spectrum
     //use span for no copy, only read access
     [[nodiscard]] std::span<const float> spectrum() const noexcept;
+    [[nodiscard]] std::span<const float> waveform() const noexcept;
 };
 
 }

@@ -53,7 +53,8 @@ class Renderer
     GLuint bars_vbo_{0};
     std::array<float, dsp::k_spectrum_bins * 2> bars_data_{};
 
-    // Visual mode: 0 = Aura (lines), 1 = Tunnel (nested rings), 2 = Bars, 3 = Burst (points)
+
+    // Visual mode: 0=Aura, 1=Tunnel, 2=Bars, 3=Burst, 4=Scope
     int  mode_{0};
     int  mode_frames_{0};
     bool key_m_prev_{false};
