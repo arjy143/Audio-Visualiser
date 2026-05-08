@@ -1,7 +1,6 @@
 #include "render/renderer.hpp"
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 
 namespace render
 {
@@ -42,7 +41,6 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glEnable(GL_PROGRAM_POINT_SIZE);
 
     // Spectrum shader + geometry
     shader_ = std::make_unique<ShaderProgram>("shaders/spectrum.vert", "shaders/spectrum.frag");
@@ -68,18 +66,6 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
     glBufferData(GL_ARRAY_BUFFER, dsp::k_spectrum_bins * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
     glVertexAttribPointer(0, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
-    glEnableVertexAttribArray(0);
-    glBindVertexArray(0);
-
-    // Particle shader + geometry — 4 floats per particle (x, y, life, hue)
-    particle_shader_ = std::make_unique<ShaderProgram>("shaders/particle.vert", "shaders/particle.frag");
-
-    glGenVertexArrays(1, &particle_vao_);
-    glGenBuffers(1, &particle_vbo_);
-    glBindVertexArray(particle_vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, particle_vbo_);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(k_max_particles * 4 * sizeof(float)), nullptr, GL_DYNAMIC_DRAW);
-    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * static_cast<GLsizei>(sizeof(float)), nullptr);
     glEnableVertexAttribArray(0);
     glBindVertexArray(0);
 
@@ -114,8 +100,6 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
 
 Renderer::~Renderer()
 {
-    glDeleteBuffers(1, &particle_vbo_);
-    glDeleteVertexArrays(1, &particle_vao_);
     glDeleteFramebuffers(1, &pong_fbo_);
     glDeleteFramebuffers(1, &ping_fbo_);
     glDeleteFramebuffers(1, &scene_fbo_);
@@ -147,9 +131,9 @@ void Renderer::render() noexcept
     glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(spectrum.size_bytes()), spectrum.data());
 
     // ── DSP / beat detection ──────────────────────────────────────
-    constexpr float k_min_db   = -90.0f;
-    constexpr float k_max_db   = -25.0f;
-    constexpr float k_two_pi   = 2.0f * 3.14159265f;
+    constexpr float k_min_db    = -90.0f;
+    constexpr float k_max_db    = -25.0f;
+    constexpr float k_two_pi    = 2.0f * 3.14159265f;
     constexpr int   k_bass_bins = 17;
 
     float bass_sum = 0.0f;
@@ -171,48 +155,7 @@ void Renderer::render() noexcept
         else                        current_symmetry_ = 4;
     }
 
-    // ── Spawn particles on beat ───────────────────────────────────
-    if (beat_hit)
-    {
-        constexpr int k_spawn = 30;
-        for (int p = 0; p < k_spawn && particle_count_ < k_max_particles; ++p)
-        {
-            const auto  bin   = static_cast<size_t>(std::rand()) % dsp::k_spectrum_bins;
-            const float freq  = static_cast<float>(bin) * 24000.0f / static_cast<float>(dsp::k_spectrum_bins - 1);
-            const float t     = std::log(std::max(freq, 20.0f) / 20.0f) / std::log(24000.0f / 20.0f);
-            const float angle = t * k_two_pi + time * 0.08f;
-
-            const float norm  = std::clamp((spectrum[bin] - k_min_db) / (k_max_db - k_min_db), 0.0f, 1.0f);
-            const float r     = 0.05f + bass_norm * 0.15f + norm * 0.82f;
-
-            const float x  = r * std::cos(angle);
-            const float y  = r * std::sin(angle);
-            const float da = (static_cast<float>(std::rand() % 1000) / 1000.0f - 0.5f) * 0.8f;
-            const float spd = 0.003f + static_cast<float>(std::rand() % 1000) / 1000.0f * 0.004f;
-
-            particles_[particle_count_++] = {x, y,
-                std::cos(angle + da) * spd,
-                std::sin(angle + da) * spd,
-                1.0f, t};
-        }
-    }
-
-    // ── Update particles ──────────────────────────────────────────
-    {
-        size_t alive = 0;
-        for (size_t i = 0; i < particle_count_; ++i)
-        {
-            Particle& p = particles_[i];
-            p.x    += p.vx;
-            p.y    += p.vy;
-            p.life *= 0.96f;
-            if (p.life > 0.01f)
-                particles_[alive++] = p;
-        }
-        particle_count_ = alive;
-    }
-
-    // ── Pass 1: fade + spectrum + particles → scene FBO ──────────
+    // ── Pass 1: fade + spectrum → scene FBO ──────────────────────
     glBindFramebuffer(GL_FRAMEBUFFER, scene_fbo_);
     glEnable(GL_BLEND);
 
@@ -249,26 +192,6 @@ void Renderer::render() noexcept
             glUniform1f(uniforms_.flip, static_cast<float>(flip));
             glDrawArrays(GL_LINE_LOOP, 0, k_bins);
         }
-    }
-
-    // Draw particles into the same scene FBO (they get bloom too)
-    if (particle_count_ > 0)
-    {
-        std::array<float, k_max_particles * 4> pdata{};
-        for (size_t i = 0; i < particle_count_; ++i)
-        {
-            pdata[i*4+0] = particles_[i].x;
-            pdata[i*4+1] = particles_[i].y;
-            pdata[i*4+2] = particles_[i].life;
-            pdata[i*4+3] = particles_[i].hue;
-        }
-        glBindBuffer(GL_ARRAY_BUFFER, particle_vbo_);
-        glBufferSubData(GL_ARRAY_BUFFER, 0,
-            static_cast<GLsizeiptr>(particle_count_ * 4 * sizeof(float)), pdata.data());
-
-        particle_shader_->bind();
-        glBindVertexArray(particle_vao_);
-        glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(particle_count_));
     }
 
     // ── Passes 2-5: Gaussian blur ─────────────────────────────────

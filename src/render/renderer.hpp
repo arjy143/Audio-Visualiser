@@ -46,16 +46,6 @@ class Renderer
 
     int current_symmetry_{6};
 
-    // Particles
-    struct Particle { float x, y, vx, vy, life, hue; };
-    static constexpr size_t k_max_particles = 300;
-    std::array<Particle, k_max_particles> particles_{};
-    size_t particle_count_{0};
-
-    GLuint particle_vao_{0};
-    GLuint particle_vbo_{0};
-    std::unique_ptr<ShaderProgram> particle_shader_;
-
 public:
     Renderer(dsp::Analyser& analyser, const char* title, int width, int height);
     ~Renderer();
