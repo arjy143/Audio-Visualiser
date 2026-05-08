@@ -122,6 +122,7 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_PROGRAM_POINT_SIZE);
 
     // Spectrum shader + geometry
     shader_ = std::make_unique<ShaderProgram>("shaders/spectrum.vert", "shaders/spectrum.frag");
@@ -146,6 +147,16 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
     glBindVertexArray(vao_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
     glBufferData(GL_ARRAY_BUFFER, dsp::k_spectrum_bins * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
+    glEnableVertexAttribArray(0);
+    glBindVertexArray(0);
+
+    // Bars VAO/VBO — 2 floats per bin (inner + outer vertex share same magnitude)
+    glGenVertexArrays(1, &bars_vao_);
+    glGenBuffers(1, &bars_vbo_);
+    glBindVertexArray(bars_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, bars_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(dsp::k_spectrum_bins * 2 * sizeof(float)), nullptr, GL_DYNAMIC_DRAW);
     glVertexAttribPointer(0, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
     glBindVertexArray(0);
@@ -181,6 +192,8 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
 
 Renderer::~Renderer()
 {
+    glDeleteBuffers(1, &bars_vbo_);
+    glDeleteVertexArrays(1, &bars_vao_);
     glDeleteFramebuffers(1, &pong_fbo_);
     glDeleteFramebuffers(1, &ping_fbo_);
     glDeleteFramebuffers(1, &scene_fbo_);
@@ -236,6 +249,25 @@ void Renderer::render() noexcept
         else                        current_symmetry_ = 4;
     }
 
+    // ── Mode switching ────────────────────────────────────────────
+    // Auto-advance every ~90 s, but only on a beat so the cut feels musical.
+    // M key forces an immediate switch at any time.
+    constexpr int k_mode_duration = 90 * 60;   // frames (~90 s at 60 fps)
+    constexpr int k_num_modes     = 4;
+
+    ++mode_frames_;
+    const bool key_m     = glfwGetKey(window_, GLFW_KEY_M) == GLFW_PRESS;
+    const bool key_trig  = key_m && !key_m_prev_;
+    key_m_prev_          = key_m;
+
+    if (key_trig || (beat_hit && mode_frames_ >= k_mode_duration))
+    {
+        mode_        = (mode_ + 1) % k_num_modes;
+        mode_frames_ = 0;
+        // Overload beat_kick_ so the bloom flares on the mode change
+        beat_kick_   = std::max(beat_kick_, 1.8f);
+    }
+
     // ── Pass 1: fade + spectrum → scene FBO ──────────────────────
     glBindFramebuffer(GL_FRAMEBUFFER, scene_fbo_);
     glEnable(GL_BLEND);
@@ -256,22 +288,78 @@ void Renderer::render() noexcept
     glUniform1f(uniforms_.time,        time);
     glUniform1f(uniforms_.bass_energy, bass_norm);
     glUniform1f(uniforms_.beat_kick,   beat_kick_);
-    glUniform1f(uniforms_.scale,       1.0f);
-    glUniform1f(uniforms_.fan_mode,    0.0f);
     glUniform1f(uniforms_.alpha,       1.0f);
 
     const GLsizei k_bins = static_cast<GLsizei>(dsp::k_spectrum_bins);
 
-    glBindVertexArray(vao_);
-    for (int i = 0; i < current_symmetry_; ++i)
-    {
-        const float rotation = k_two_pi * static_cast<float>(i) / static_cast<float>(current_symmetry_);
-        glUniform1f(uniforms_.rotation, rotation);
-
-        for (int flip = 0; flip < 2; ++flip)
+    // Shared lambda: draw one pass of the current VAO for all symmetry copies
+    auto draw_ring = [&](GLenum primitive, GLsizei count, int flips, float scale, float alpha, float offset) {
+        glUniform1f(uniforms_.scale, scale);
+        glUniform1f(uniforms_.alpha, alpha);
+        for (int i = 0; i < current_symmetry_; ++i)
         {
-            glUniform1f(uniforms_.flip, static_cast<float>(flip));
-            glDrawArrays(GL_LINE_LOOP, 0, k_bins);
+            const float rot = k_two_pi * static_cast<float>(i) / static_cast<float>(current_symmetry_) + offset;
+            glUniform1f(uniforms_.rotation, rot);
+            for (int flip = 0; flip < flips; ++flip)
+            {
+                glUniform1f(uniforms_.flip, static_cast<float>(flip));
+                glDrawArrays(primitive, 0, count);
+            }
+        }
+    };
+
+    switch (mode_)
+    {
+        case 0: // Aura — flowing kaleidoscope lines
+        {
+            glUniform1f(uniforms_.fan_mode, 0.0f);
+            glBindVertexArray(vao_);
+            draw_ring(GL_LINE_LOOP, k_bins, 2, 1.0f, 1.0f, 0.0f);
+            break;
+        }
+
+        case 1: // Tunnel — 6 nested rings creating a zoom-into-infinity effect
+        {
+            glUniform1f(uniforms_.fan_mode, 0.0f);
+            glBindVertexArray(vao_);
+            constexpr int k_rings = 6;
+            for (int ring = 0; ring < k_rings; ++ring)
+            {
+                const float frac   = static_cast<float>(ring) / static_cast<float>(k_rings - 1);
+                const float scale  = 0.2f + 0.8f * frac;
+                const float alpha  = 0.25f + 0.75f * frac;
+                // Offset each ring's rotation so the layers feel independent
+                const float offset = static_cast<float>(ring) * 0.28f;
+                draw_ring(GL_LINE_LOOP, k_bins, 2, scale, alpha, offset);
+            }
+            break;
+        }
+
+        case 2: // Bars — radial spokes from inner circle to spectrum amplitude
+        {
+            // Upload doubled magnitudes: [m0,m0, m1,m1, ...]
+            for (size_t i = 0; i < dsp::k_spectrum_bins; ++i)
+            {
+                bars_data_[i * 2]     = spectrum[i];
+                bars_data_[i * 2 + 1] = spectrum[i];
+            }
+            glBindBuffer(GL_ARRAY_BUFFER, bars_vbo_);
+            glBufferSubData(GL_ARRAY_BUFFER, 0,
+                static_cast<GLsizeiptr>(dsp::k_spectrum_bins * 2 * sizeof(float)),
+                bars_data_.data());
+
+            glUniform1f(uniforms_.fan_mode, 2.0f);
+            glBindVertexArray(bars_vao_);
+            draw_ring(GL_LINES, static_cast<GLsizei>(dsp::k_spectrum_bins * 2), 2, 1.0f, 1.0f, 0.0f);
+            break;
+        }
+
+        case 3: // Burst — mirrored constellation of points
+        {
+            glUniform1f(uniforms_.fan_mode, 3.0f);
+            glBindVertexArray(vao_);
+            draw_ring(GL_POINTS, k_bins, 2, 1.0f, 1.0f, 0.0f);
+            break;
         }
     }
 

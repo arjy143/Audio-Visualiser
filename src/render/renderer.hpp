@@ -6,6 +6,7 @@
 #include "render/visualiser.hpp"
 #include "dsp/analyser.hpp"
 #include <memory>
+#include <array>
 
 namespace render
 {
@@ -45,6 +46,17 @@ class Renderer
     struct FadeUniforms      { GLint bass_energy, beat_kick, time;  } fade_uniforms_{};
 
     int current_symmetry_{6};
+
+    // Bars mode VAO/VBO — magnitudes stored doubled: [m0,m0, m1,m1, ...]
+    // so that each GL_LINES pair shares the same magnitude (inner + outer endpoint).
+    GLuint bars_vao_{0};
+    GLuint bars_vbo_{0};
+    std::array<float, dsp::k_spectrum_bins * 2> bars_data_{};
+
+    // Visual mode: 0 = Aura (lines), 1 = Tunnel (nested rings), 2 = Bars, 3 = Burst (points)
+    int  mode_{0};
+    int  mode_frames_{0};
+    bool key_m_prev_{false};
 
 public:
     Renderer(dsp::Analyser& analyser, const char* title, int width, int height);
