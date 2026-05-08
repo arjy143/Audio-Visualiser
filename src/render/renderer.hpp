@@ -3,7 +3,6 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include "render/shader.hpp"
-#include "render/visualiser.hpp"
 #include "dsp/analyser.hpp"
 #include <memory>
 #include <array>
@@ -17,9 +16,7 @@ class Renderer
     GLuint vao_{0};
     GLuint vbo_{0};
 
-    // Spectrum rendering
     std::unique_ptr<ShaderProgram> shader_;
-    Visualiser visualiser_;
     dsp::Analyser& analyser_;
 
     struct Uniforms
@@ -54,7 +51,7 @@ class Renderer
     std::array<float, dsp::k_spectrum_bins * 2> bars_data_{};
 
 
-    // Visual mode: 0=Aura, 1=Tunnel, 2=Bars, 3=Burst, 4=Scope
+    // Visual mode: 0=Aura, 1=Tunnel, 2=Bars, 3=Burst, 4=Circle
     int  mode_{0};
     int  mode_frames_{0};
     bool key_m_prev_{false};

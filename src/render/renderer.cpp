@@ -245,7 +245,6 @@ void Renderer::render() noexcept
         beat_kick_ = 1.0f;
         if      (bass_norm > 0.75f) current_symmetry_ = 8;
         else if (bass_norm > 0.50f) current_symmetry_ = 6;
-        else if (bass_norm > 0.25f) current_symmetry_ = 4;
         else                        current_symmetry_ = 4;
     }
 
