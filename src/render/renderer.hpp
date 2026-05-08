@@ -16,11 +16,11 @@ class Renderer
     GLuint vao_{0};
     GLuint vbo_{0};
 
+    // Spectrum rendering
     std::unique_ptr<ShaderProgram> shader_;
     Visualiser visualiser_;
     dsp::Analyser& analyser_;
 
-    // Uniform locations cached at startup — glGetUniformLocation is slow
     struct Uniforms
     {
         GLint bin_count, min_db, max_db, min_freq, max_freq;
@@ -28,8 +28,23 @@ class Renderer
     };
     Uniforms uniforms_{};
 
-    float bass_avg_{0.0f};   // slow EMA of bass level — the "background"
-    float beat_kick_{0.0f};  // 1.0 on a beat, decays to 0 each frame
+    float bass_avg_{0.0f};
+    float beat_kick_{0.0f};
+
+    // Post-processing
+    GLuint scene_fbo_{0}, ping_fbo_{0}, pong_fbo_{0};
+    GLuint scene_tex_{0}, ping_tex_{0}, pong_tex_{0};
+    GLuint quad_vao_{0};
+
+    std::unique_ptr<ShaderProgram> blur_shader_;
+    std::unique_ptr<ShaderProgram> composite_shader_;
+    std::unique_ptr<ShaderProgram> fade_shader_;
+
+    struct BlurUniforms      { GLint image, horizontal;             } blur_uniforms_{};
+    struct CompositeUniforms { GLint scene, bloom;                  } composite_uniforms_{};
+    struct FadeUniforms      { GLint bass_energy, beat_kick, time;  } fade_uniforms_{};
+
+    int current_symmetry_{6};
 
 public:
     Renderer(dsp::Analyser& analyser, const char* title, int width, int height);

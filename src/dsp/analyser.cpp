@@ -11,13 +11,13 @@ namespace dsp
     //call this once per frame
     void Analyser::update() noexcept
     {
-        //no partial fft if the buffer isn't full
-        if (ring_buffer_.available() < k_FFT_size)
-        {
-            return;
-        }    
+        const size_t avail = ring_buffer_.available();
+        if (avail < k_FFT_size) return;
 
-        //read from ring buffer into samples
+        // Discard all but the most recent window — always analyse fresh audio
+        if (avail > k_FFT_size)
+            ring_buffer_.discard(avail - k_FFT_size);
+
         ring_buffer_.pop(samples_.data(), k_FFT_size);
 
         //apply hann window

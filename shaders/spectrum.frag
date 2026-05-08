@@ -15,6 +15,10 @@ void main()
     // Convert hue to RGB by walking the 6-segment colour wheel
     vec3 colour = clamp(abs(fract(h + vec3(0.0, 0.333, 0.667)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
 
+    // Pull saturation back from pure neon — mix toward greyscale
+    float luma = dot(colour, vec3(0.299, 0.587, 0.114));
+    colour = mix(vec3(luma), colour, 0.6);
+
     // Magnitude controls brightness — quiet bins are dark, loud ones glow
     float brightness = 0.1 + vMagnitude * 0.9;
     colour *= brightness;

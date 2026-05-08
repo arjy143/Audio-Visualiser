@@ -73,6 +73,15 @@ public:
         return count;
     }
 
+    size_t discard(size_t count) noexcept
+    {
+        const size_t tail  = tail_.load(std::memory_order_relaxed);
+        const size_t avail = head_.load(std::memory_order_acquire) - tail;
+        count = std::min(count, avail);
+        tail_.store(tail + count, std::memory_order_release);
+        return count;
+    }
+
     size_t available() const noexcept
     {
         //producer wrote head_
