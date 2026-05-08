@@ -2,6 +2,7 @@
 
 An audio visualiser for Linux that runs as a live desktop wallpaper on X11. My motivation was to have my own custom live wallpaper that reacts to system sounds and music with beautiful visualisations.
 
+![alt text](Screenshot_20260508_135514.png)
 
 ## Requirements
 
