@@ -12,7 +12,8 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(PIPEWIRE REQUIRED libpipewire-0.3)
 pkg_check_modules(GLFW     REQUIRED glfw3)
 find_package(OpenGL REQUIRED)
-find_package(GLEW REQUIRED)
+find_package(GLEW   REQUIRED)
+find_package(X11    REQUIRED)
 
 # ── Core library (testable without a window) ─────────────────────
 add_library(audiovis_core STATIC
@@ -69,6 +70,7 @@ target_link_libraries(audiovis PRIVATE
     OpenGL::GL
     ${GLFW_LIBRARIES}
     GLEW::GLEW
+    X11::X11
 )
 
 # Copy shaders next to the binary so relative paths work

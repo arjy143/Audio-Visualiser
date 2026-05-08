@@ -4,11 +4,22 @@
 #include "audio/capture.hpp"
 #include <stdexcept>
 #include <cstdio>
+#include <filesystem>
+#include <unistd.h>
 
 int main()
-{  
+{
     try
     {
+        // Set CWD to the directory containing the binary so that relative
+        // paths like "shaders/spectrum.vert" work regardless of how the app
+        // is launched (terminal, systemd service, desktop autostart, etc.).
+        {
+            char buf[4096] = {};
+            if (::readlink("/proc/self/exe", buf, sizeof(buf) - 1) > 0)
+                std::filesystem::current_path(
+                    std::filesystem::path(buf).parent_path());
+        }
         ring_buffer::RingBuffer<float, 65536> buffer;
         capture::Capture capture{buffer};
         dsp::Analyser analyser{buffer};

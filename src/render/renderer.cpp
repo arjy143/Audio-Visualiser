@@ -1,6 +1,12 @@
 #include "render/renderer.hpp"
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
+
+// Must come after GL headers; gates the X11 native-handle API in glfw3native.h
+#define GLFW_EXPOSE_NATIVE_X11
+#include <GLFW/glfw3native.h>
+#include <X11/Xatom.h>
 
 namespace render
 {
@@ -27,10 +33,29 @@ namespace
 Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int height)
     : analyser_(analyser)
 {
+#ifdef GLFW_PLATFORM_X11
+    // Force GLFW to use X11 even when WAYLAND_DISPLAY is set, so we can
+    // apply EWMH desktop-background hints via the X11 native API.
+    glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+#endif
     glfwInit();
+
+    // Cover the full primary monitor — ignore the width/height arguments.
+    // Guard both calls: glfwGetPrimaryMonitor() returns null if DISPLAY is wrong,
+    // and passing null to glfwGetVideoMode() triggers an internal assert → SIGABRT.
+    GLFWmonitor* primary = glfwGetPrimaryMonitor();
+    if (!primary)
+        throw std::runtime_error("GLFW: no monitor found — check DISPLAY env var");
+    const GLFWvidmode* mode = glfwGetVideoMode(primary);
+    if (!mode)
+        throw std::runtime_error("GLFW: could not read video mode for primary monitor");
+    width  = mode->width;
+    height = mode->height;
+
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);  // no title bar or border
 
     window_ = glfwCreateWindow(width, height, title, nullptr, nullptr);
     if (!window_)
@@ -38,6 +63,62 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
 
     glfwMakeContextCurrent(window_);
     glewInit();
+
+    // ── EWMH: tell KWin to treat this as a desktop-layer window ──────
+    {
+        Display* dpy = glfwGetX11Display();
+        ::Window  xw  = glfwGetX11Window(window_);
+
+        auto atom = [&](const char* name) {
+            return XInternAtom(dpy, name, False);
+        };
+
+        // _NET_WM_WINDOW_TYPE_DESKTOP puts the window in the desktop layer
+        const Atom type_desktop = atom("_NET_WM_WINDOW_TYPE_DESKTOP");
+        XChangeProperty(dpy, xw,
+                        atom("_NET_WM_WINDOW_TYPE"), XA_ATOM, 32, PropModeReplace,
+                        reinterpret_cast<const unsigned char*>(&type_desktop), 1);
+
+        // GLFW maps the window during glfwCreateWindow, so KWin already owns it
+        // by this point.  XChangeProperty silently succeeds but the WM ignores
+        // state changes on managed windows set that way.  The correct mechanism
+        // is a ClientMessage sent to the root window — the WM intercepts it and
+        // applies the state change itself.
+        const Atom wm_state = atom("_NET_WM_STATE");
+        auto request_state  = [&](Atom state_atom) {
+            XEvent ev          = {};
+            ev.xclient.type         = ClientMessage;
+            ev.xclient.window       = xw;
+            ev.xclient.message_type = wm_state;
+            ev.xclient.format       = 32;
+            ev.xclient.data.l[0]    = 1;                      // _NET_WM_STATE_ADD
+            ev.xclient.data.l[1]    = static_cast<long>(state_atom);
+            ev.xclient.data.l[2]    = 0;
+            ev.xclient.data.l[3]    = 1;                      // source: application
+            XSendEvent(dpy, DefaultRootWindow(dpy), False,
+                       SubstructureRedirectMask | SubstructureNotifyMask, &ev);
+        };
+
+        request_state(atom("_NET_WM_STATE_BELOW"));
+        request_state(atom("_NET_WM_STATE_STICKY"));
+        request_state(atom("_NET_WM_STATE_SKIP_TASKBAR"));
+        request_state(atom("_NET_WM_STATE_SKIP_PAGER"));
+
+        // Pin to all virtual desktops via ClientMessage (same reason as above)
+        {
+            XEvent ev          = {};
+            ev.xclient.type         = ClientMessage;
+            ev.xclient.window       = xw;
+            ev.xclient.message_type = atom("_NET_WM_DESKTOP");
+            ev.xclient.format       = 32;
+            ev.xclient.data.l[0]    = 0xFFFFFFFFL;            // all desktops sentinel
+            ev.xclient.data.l[1]    = 1;                      // source: application
+            XSendEvent(dpy, DefaultRootWindow(dpy), False,
+                       SubstructureRedirectMask | SubstructureNotifyMask, &ev);
+        }
+
+        XFlush(dpy);
+    }
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
