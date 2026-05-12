@@ -202,6 +202,21 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
+    // Iris orb VAO/VBO — same (x,y,r,g,b,a) per-vertex format, rebuilt every frame
+    glGenVertexArrays(1, &orb_vao_);
+    glGenBuffers(1, &orb_vbo_);
+    glBindVertexArray(orb_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, orb_vbo_);
+    glBufferData(GL_ARRAY_BUFFER,
+        static_cast<GLsizeiptr>(orb_data_.size() * sizeof(float)),
+        nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+        reinterpret_cast<const void*>(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+
     // Resonance web VAO/VBO — stride 6 floats: (x, y, r, g, b, a)
     web_shader_ = std::make_unique<ShaderProgram>("shaders/web.vert", "shaders/web.frag");
 
@@ -250,6 +265,8 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
 
 Renderer::~Renderer()
 {
+    glDeleteBuffers(1, &orb_vbo_);
+    glDeleteVertexArrays(1, &orb_vao_);
     glDeleteBuffers(1, &corona_vbo_);
     glDeleteVertexArrays(1, &corona_vao_);
     glDeleteBuffers(1, &pulse_vbo_);
@@ -443,15 +460,97 @@ void Renderer::render() noexcept
             break;
         }
 
-        case 4: // Circle — single unadorned ring, full spectrum once around
+        case 4: // Iris — filled annular spectrum ring with drifting rainbow hue
         {
-            glUniform1f(uniforms_.fan_mode, 0.0f);
-            glUniform1f(uniforms_.scale,    1.0f);
-            glUniform1f(uniforms_.alpha,    1.0f);
-            glUniform1f(uniforms_.rotation, 0.0f);
-            glUniform1f(uniforms_.flip,     0.0f);
-            glBindVertexArray(vao_);
-            glDrawArrays(GL_LINE_LOOP, 0, k_bins);
+            // 🧠 Concept: GL_TRIANGLE_STRIP between two concentric rings creates a
+            // filled annulus. Every adjacent pair of vertices (inner, outer) forms a
+            // quad with the next pair — no overdraw, so alpha values are exact.
+            // Log-spacing maps 20 Hz–20 kHz uniformly around the circle so bass and
+            // treble each get equal angular real-estate.
+            constexpr float k_bin_hz  = 48000.0f / static_cast<float>(dsp::k_FFT_size);
+            constexpr float k_r_inner = 0.22f;   // constant inner edge of the ring
+            constexpr float k_r_scale = 0.60f;   // max additional outward reach
+            constexpr float k_r_beat  = 0.05f;   // extra push from beat impulse
+
+            const float hue_offset = std::fmod(time * 0.05f, 1.0f);  // slow colour drift
+
+            auto hsv_rgb = [](float h, float s, float v) -> std::array<float, 3>
+            {
+                const float c = v * s;
+                const float x = c * (1.0f - std::abs(std::fmod(h * 6.0f, 2.0f) - 1.0f));
+                const float m = v - c;
+                float r = m, g = m, b = m;
+                switch (static_cast<int>(h * 6.0f) % 6)
+                {
+                    case 0: r += c; g += x; break;
+                    case 1: r += x; g += c; break;
+                    case 2: g += c; b += x; break;
+                    case 3: g += x; b += c; break;
+                    case 4: r += x; b += c; break;
+                    case 5: r += c; b += x; break;
+                }
+                return {r, g, b};
+            };
+
+            // Build interleaved strip: inner[i], outer[i], ..., closing pair
+            for (int i = 0; i <= k_orb_n; ++i)
+            {
+                const int   ci    = i % k_orb_n;
+                const float t     = static_cast<float>(ci) / static_cast<float>(k_orb_n);
+                const float freq  = 20.0f * std::pow(20000.0f / 20.0f, t);
+                const int   bin   = std::clamp(static_cast<int>(freq / k_bin_hz),
+                                               0, static_cast<int>(dsp::k_spectrum_bins) - 1);
+                // Average 3 adjacent bins to smooth single-bin noise spikes
+                const int lo = std::max(0, bin - 1);
+                const int hi = std::min(static_cast<int>(dsp::k_spectrum_bins) - 1, bin + 1);
+                float peak = k_min_db;
+                for (int b = lo; b <= hi; ++b)
+                    peak = std::max<float>(peak, spectrum[static_cast<size_t>(b)]);
+                const float amp = std::clamp((peak - k_min_db) / (k_max_db - k_min_db),
+                                             0.0f, 1.0f);
+
+                const float r_out = k_r_inner + amp * k_r_scale + beat_kick_ * k_r_beat;
+                const float angle = k_two_pi * t;
+                const float ca    = std::cos(angle), sa = std::sin(angle);
+
+                const float hue   = std::fmod(t + hue_offset, 1.0f);
+                const auto  col   = hsv_rgb(hue, 0.88f, 0.35f + amp * 0.65f);
+                const float out_a = 0.30f + amp * 0.70f;
+
+                const size_t vi = static_cast<size_t>(i) * 12;
+                // Inner vertex: dim cool blue — constant anchor edge
+                orb_data_[vi + 0] = k_r_inner * ca;
+                orb_data_[vi + 1] = k_r_inner * sa;
+                orb_data_[vi + 2] = 0.50f;
+                orb_data_[vi + 3] = 0.72f;
+                orb_data_[vi + 4] = 1.00f;
+                orb_data_[vi + 5] = 0.08f + bass_norm * 0.22f;
+                // Outer vertex: frequency-mapped rainbow colour
+                orb_data_[vi + 6]  = r_out * ca;
+                orb_data_[vi + 7]  = r_out * sa;
+                orb_data_[vi + 8]  = col[0];
+                orb_data_[vi + 9]  = col[1];
+                orb_data_[vi + 10] = col[2];
+                orb_data_[vi + 11] = out_a;
+            }
+
+            glBindBuffer(GL_ARRAY_BUFFER, orb_vbo_);
+            glBufferSubData(GL_ARRAY_BUFFER, 0,
+                static_cast<GLsizeiptr>(orb_data_.size() * sizeof(float)),
+                orb_data_.data());
+            web_shader_->bind();
+            glBindVertexArray(orb_vao_);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 2 * (k_orb_n + 1));
+
+            // Inner glow ring — pulses blue-white on beats, anchors the visual centre
+            pulse_shader_->bind();
+            glBindVertexArray(pulse_vao_);
+            glUniform1f(pulse_uniforms_.radius, k_r_inner * (1.0f - beat_kick_ * 0.06f));
+            glUniform4f(pulse_uniforms_.colour,
+                0.65f, 0.85f, 1.0f,
+                0.20f + beat_kick_ * 0.70f);
+            glDrawArrays(GL_LINE_LOOP, 0, static_cast<GLsizei>(k_pulse_segs));
+
             break;
         }
 

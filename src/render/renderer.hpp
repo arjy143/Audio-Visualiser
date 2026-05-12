@@ -72,6 +72,14 @@ class Renderer
     std::unique_ptr<ShaderProgram> pulse_shader_;
     struct PulseUniforms { GLint radius, colour; } pulse_uniforms_{};
 
+    // Mode 4: Iris — filled annular spectrum ring (GL_TRIANGLE_STRIP).
+    // Interleaved layout: inner[0], outer[0], inner[1], outer[1], ..., closing pair.
+    // Each vertex is (x, y, r, g, b, a) = 6 floats.
+    static constexpr int k_orb_n = 1024;  // log-spaced samples around ring (20 Hz – 20 kHz)
+    GLuint orb_vao_{0};
+    GLuint orb_vbo_{0};
+    std::array<float, (k_orb_n + 1) * 12> orb_data_{};
+
     // Resonance web mode — N-choose-2 mesh of frequency-band vertices
     // 12 vertices → 66 lines; each line endpoint carries (x,y,r,g,b,a).
     static constexpr int k_web_n     = 12;
@@ -83,7 +91,7 @@ class Renderer
 
     std::unique_ptr<ShaderProgram> web_shader_;
 
-    // Visual mode: 0=Aura, 1=Tunnel, 2=Bars, 3=Burst, 4=Circle, 5=BassPulse, 6=Web
+    // Visual mode: 0=Aura, 1=Tunnel, 2=Bars, 3=Burst, 4=Iris, 5=BassPulse, 6=Web
     int  mode_{0};
     int  mode_frames_{0};
     bool key_m_prev_{false};
