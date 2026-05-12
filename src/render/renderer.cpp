@@ -51,6 +51,8 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
         throw std::runtime_error("GLFW: could not read video mode for primary monitor");
     width  = mode->width;
     height = mode->height;
+    width_  = width;
+    height_ = height;
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -238,6 +240,7 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
     make_fbo(width, height, scene_fbo_, scene_tex_);
     make_fbo(width, height, ping_fbo_,  ping_tex_);
     make_fbo(width, height, pong_fbo_,  pong_tex_);
+    make_fbo(width, height, milk_fbo_,  milk_tex_);
 
     glGenVertexArrays(1, &quad_vao_);
 
@@ -254,8 +257,16 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
         fade_shader_->uniform("uTime"),
     };
 
+    milk_shader_ = std::make_unique<ShaderProgram>("shaders/quad.vert", "shaders/milk.frag");
+    milk_uniforms_ = {
+        milk_shader_->uniform("uPrev"),
+        milk_shader_->uniform("uBass"),
+        milk_shader_->uniform("uBeat"),
+        milk_shader_->uniform("uTime"),
+    };
+
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    for (const GLuint fbo : {scene_fbo_, ping_fbo_, pong_fbo_})
+    for (const GLuint fbo : {scene_fbo_, ping_fbo_, pong_fbo_, milk_fbo_})
     {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -265,6 +276,8 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
 
 Renderer::~Renderer()
 {
+    glDeleteFramebuffers(1, &milk_fbo_);
+    glDeleteTextures(1, &milk_tex_);
     glDeleteBuffers(1, &orb_vbo_);
     glDeleteVertexArrays(1, &orb_vao_);
     glDeleteBuffers(1, &corona_vbo_);
@@ -351,7 +364,7 @@ void Renderer::render() noexcept
     // Auto-advance every ~90 s, but only on a beat so the cut feels musical.
     // M key forces an immediate switch at any time.
     constexpr int k_mode_duration = 90 * 60;   // frames (~90 s at 60 fps)
-    constexpr int k_num_modes     = 7;
+    constexpr int k_num_modes     = 8;
 
     ++mode_frames_;
     const bool key_m     = glfwGetKey(window_, GLFW_KEY_M) == GLFW_PRESS;
@@ -366,16 +379,38 @@ void Renderer::render() noexcept
         beat_kick_   = std::max(beat_kick_, 1.8f);
     }
 
-    // ── Pass 1: fade + spectrum → scene FBO ──────────────────────
+    // ── Pass 1: background → scene FBO ───────────────────────────
+    // Milk mode warps its own feedback texture instead of fading to black.
+    // All other modes use the standard semi-transparent fade quad.
     glBindFramebuffer(GL_FRAMEBUFFER, scene_fbo_);
-    glEnable(GL_BLEND);
 
-    fade_shader_->bind();
-    glUniform1f(fade_uniforms_.bass_energy, bass_norm);
-    glUniform1f(fade_uniforms_.beat_kick,   beat_kick_);
-    glUniform1f(fade_uniforms_.time,        time);
-    glBindVertexArray(quad_vao_);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+    if (mode_ == 7)
+    {
+        // ⚡ Performance note: blend must be OFF here so the warp shader fully
+        // replaces every pixel.  With blend ON the warp output would be composited
+        // over the stale scene_fbo_ content from the previous frame, doubling up.
+        glDisable(GL_BLEND);
+        milk_shader_->bind();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, milk_tex_);
+        glUniform1i(milk_uniforms_.prev, 0);
+        glUniform1f(milk_uniforms_.bass, bass_norm);
+        glUniform1f(milk_uniforms_.beat, beat_kick_);
+        glUniform1f(milk_uniforms_.time, time);
+        glBindVertexArray(quad_vao_);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glEnable(GL_BLEND);
+    }
+    else
+    {
+        glEnable(GL_BLEND);
+        fade_shader_->bind();
+        glUniform1f(fade_uniforms_.bass_energy, bass_norm);
+        glUniform1f(fade_uniforms_.beat_kick,   beat_kick_);
+        glUniform1f(fade_uniforms_.time,        time);
+        glBindVertexArray(quad_vao_);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
 
     shader_->bind();
     glUniform1i(uniforms_.bin_count,   static_cast<int>(dsp::k_spectrum_bins));
@@ -700,6 +735,31 @@ void Renderer::render() noexcept
             glUniform4f(pulse_uniforms_.colour, 0.20f, 0.35f, 0.55f, 0.30f);
             glDrawArrays(GL_LINE_LOOP, 0, k_segs);
 
+            break;
+        }
+
+        case 7: // Milk — warp-feedback loop with kaleidoscope injection
+        {
+            // 🧠 Concept: the milk_shader_ (run above) read last frame's milk_tex_,
+            // applied zoom + rotation + sinusoidal warp, and wrote the result to
+            // scene_fbo_.  We now inject a fresh spectrum ring on top — those lines
+            // become "seeds" that the warp distorts into flowing coloured streams
+            // over subsequent frames.  At the end we blit scene_fbo_ → milk_tex_
+            // so the next frame's warp has this frame's content to work with.
+            glUniform1f(uniforms_.fan_mode, 0.0f);
+            glBindVertexArray(vao_);
+            // Low injection alpha keeps the warp history dominant.  Too high and
+            // the ring overwrites the distorted trails before they can evolve.
+            draw_ring(GL_LINE_LOOP, k_bins, 2, 1.00f, 0.28f, 0.0f);
+            if (beat_hit)
+                draw_ring(GL_LINE_LOOP, k_bins, 2, 1.12f, 0.22f, 0.0f);
+
+            // Capture scene → milk texture before the bloom passes run.
+            // Using GL_READ/DRAW split lets us blit without an extra copy shader.
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, scene_fbo_);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, milk_fbo_);
+            glBlitFramebuffer(0, 0, width_, height_, 0, 0, width_, height_,
+                              GL_COLOR_BUFFER_BIT, GL_LINEAR);
             break;
         }
 

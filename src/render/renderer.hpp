@@ -13,6 +13,7 @@ namespace render
 class Renderer
 {
     GLFWwindow* window_{nullptr};
+    int width_{0}, height_{0};
     GLuint vao_{0};
     GLuint vbo_{0};
 
@@ -44,6 +45,12 @@ class Renderer
     struct BlurUniforms      { GLint image, horizontal;             } blur_uniforms_{};
     struct CompositeUniforms { GLint scene, bloom;                  } composite_uniforms_{};
     struct FadeUniforms      { GLint bass_energy, beat_kick, time;  } fade_uniforms_{};
+
+    // Milk-drop feedback — persistent texture that the warp shader reads each frame
+    GLuint milk_fbo_{0};
+    GLuint milk_tex_{0};
+    std::unique_ptr<ShaderProgram> milk_shader_;
+    struct MilkUniforms { GLint prev, bass, beat, time; } milk_uniforms_{};
 
     int current_symmetry_{6};
 
@@ -91,7 +98,7 @@ class Renderer
 
     std::unique_ptr<ShaderProgram> web_shader_;
 
-    // Visual mode: 0=Aura, 1=Tunnel, 2=Bars, 3=Burst, 4=Iris, 5=BassPulse, 6=Web
+    // Visual mode: 0=Aura, 1=Tunnel, 2=Bars, 3=Burst, 4=Iris, 5=BassPulse, 6=Web, 7=Milk
     int  mode_{0};
     int  mode_frames_{0};
     bool key_m_prev_{false};
