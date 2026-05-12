@@ -19,6 +19,7 @@ class Renderer
     std::unique_ptr<ShaderProgram> shader_;
     dsp::Analyser& analyser_;
 
+    //cache the GLint values instead of calling inside the driver every time
     struct Uniforms
     {
         GLint bin_count, min_db, max_db, min_freq, max_freq;
@@ -26,10 +27,11 @@ class Renderer
     };
     Uniforms uniforms_{};
 
+    //beat detection
     float bass_avg_{0.0f};
     float beat_kick_{0.0f};
 
-    // Post-processing
+    //post-processing
     GLuint scene_fbo_{0}, ping_fbo_{0}, pong_fbo_{0};
     GLuint scene_tex_{0}, ping_tex_{0}, pong_tex_{0};
     GLuint quad_vao_{0};
