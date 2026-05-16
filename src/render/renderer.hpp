@@ -60,24 +60,23 @@ class Renderer
     GLuint bars_vbo_{0};
     std::array<float, dsp::k_spectrum_bins * 2> bars_data_{};
 
-    // Bass pulse mode — frequency corona + staggered membrane + ripple rings
+    // Mode 4 Iris — inner anchor ring (unit-circle geometry, scaled by shader)
     static constexpr int k_pulse_segs = 128;
-    static constexpr int k_pulse_max  = 12;   // larger pool for fast music + double-spawns
-    static constexpr int k_corona_n   = 64;   // radial frequency spokes around the membrane
-
-    struct PulseRing { float radius = 0.0f; float alpha = 0.0f; };
-    std::array<PulseRing, k_pulse_max> pulse_rings_{};
-
     GLuint pulse_vao_{0};
     GLuint pulse_vbo_{0};
 
-    // Corona uses the same (x,y,r,g,b,a) per-vertex format as the web shader
-    GLuint corona_vao_{0};
-    GLuint corona_vbo_{0};
-    std::array<float, k_corona_n * 12> corona_data_{};  // 2 verts × 6 floats per spoke
+    // Mode 5 Prism — kaleidoscope: fundamental sector + 2N draw calls
+    // Sector spans [0, π/N]; mirror copy covers [-π/N, 0]; N pairs tile 2π.
+    static constexpr int k_kal_segs = 128;
+    GLuint kal_vao_{0};
+    GLuint kal_vbo_{0};
+    std::array<float, (k_kal_segs + 1) * 6> kal_data_{};  // 1 centre + k_kal_segs arc verts
 
     std::unique_ptr<ShaderProgram> pulse_shader_;
     struct PulseUniforms { GLint radius, colour; } pulse_uniforms_{};
+
+    std::unique_ptr<ShaderProgram> kal_shader_;
+    struct KalUniforms { GLint angle, mirror; } kal_uniforms_{};
 
     // Mode 4: Iris — filled annular spectrum ring (GL_TRIANGLE_STRIP).
     // Interleaved layout: inner[0], outer[0], inner[1], outer[1], ..., closing pair.
@@ -98,7 +97,7 @@ class Renderer
 
     std::unique_ptr<ShaderProgram> web_shader_;
 
-    // Visual mode: 0=Aura, 1=Tunnel, 2=Bars, 3=Burst, 4=Iris, 5=BassPulse, 6=Web, 7=Milk
+    // Visual mode: 0=Aura, 1=Tunnel, 2=Bars, 3=Burst, 4=Iris, 5=Prism, 6=Web, 7=Milk
     int  mode_{0};
     int  mode_frames_{0};
     bool key_m_prev_{false};

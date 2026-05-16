@@ -189,13 +189,16 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
         glBindVertexArray(0);
     }
 
-    // Corona VAO/VBO — same (x,y,r,g,b,a) per-vertex format as the web, dynamic each frame
-    glGenVertexArrays(1, &corona_vao_);
-    glGenBuffers(1, &corona_vbo_);
-    glBindVertexArray(corona_vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, corona_vbo_);
+    // Prism kaleidoscope VAO/VBO — same (x,y,r,g,b,a) per-vertex format, rebuilt each frame
+    kal_shader_   = std::make_unique<ShaderProgram>("shaders/kal.vert", "shaders/web.frag");
+    kal_uniforms_ = { kal_shader_->uniform("uAngle"), kal_shader_->uniform("uMirror") };
+
+    glGenVertexArrays(1, &kal_vao_);
+    glGenBuffers(1, &kal_vbo_);
+    glBindVertexArray(kal_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, kal_vbo_);
     glBufferData(GL_ARRAY_BUFFER,
-        static_cast<GLsizeiptr>(corona_data_.size() * sizeof(float)),
+        static_cast<GLsizeiptr>(kal_data_.size() * sizeof(float)),
         nullptr, GL_DYNAMIC_DRAW);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
@@ -280,8 +283,8 @@ Renderer::~Renderer()
     glDeleteTextures(1, &milk_tex_);
     glDeleteBuffers(1, &orb_vbo_);
     glDeleteVertexArrays(1, &orb_vao_);
-    glDeleteBuffers(1, &corona_vbo_);
-    glDeleteVertexArrays(1, &corona_vao_);
+    glDeleteBuffers(1, &kal_vbo_);
+    glDeleteVertexArrays(1, &kal_vao_);
     glDeleteBuffers(1, &pulse_vbo_);
     glDeleteVertexArrays(1, &pulse_vao_);
     glDeleteBuffers(1, &web_vbo_);
@@ -589,47 +592,22 @@ void Renderer::render() noexcept
             break;
         }
 
-        case 5: // Bass pulse — frequency corona + staggered membrane + ripple rings
+        case 5: // Prism — kaleidoscope of frequency-mapped wedges
         {
-            constexpr float k_base_r     = 0.28f;
-            constexpr float k_expand_spd = 0.016f;  // NDC/frame — ring crosses screen in ~34 frames
-            constexpr float k_ring_fade  = 0.922f;  // lifetime tuned to match expansion speed
-            constexpr float k_outer_r    = 0.82f;
-            constexpr float k_bin_hz     = 48000.0f / static_cast<float>(dsp::k_FFT_size);
-            constexpr float k_spoke_len  = 0.24f;   // max spoke length from frequency energy alone
-            constexpr float k_flare      = 0.20f;   // every beat flares ALL spokes by this much
+            // 🧠 Concept: the fundamental sector spans [0, π/N] on the x-axis.
+            // The mirror image (y-flip then same rotation) covers [-π/N, 0].
+            // Together they tile one full sector of 2π/N; N such pairs cover 2π.
+            // The kal.vert shader applies the flip and rotation — zero CPU geometry
+            // duplication. Only the fundamental arc is ever uploaded.
+            constexpr float k_r_min  = 0.08f;   // silence → petals retract to small nub
+            constexpr float k_r_max  = 0.90f;   // loud signal → petals reach edge of screen
+            constexpr float k_bin_hz = 48000.0f / static_cast<float>(dsp::k_FFT_size);
 
-            const float impulse = std::max(beat_kick_, onset_kick_);
-            const float mem_r   = k_base_r + bass_norm * 0.06f + impulse * 0.32f;
-
-            // ── Update ring pool ──────────────────────────────────────────────────
-            for (auto& ring : pulse_rings_)
-            {
-                if (ring.alpha < 0.01f) continue;
-                ring.radius += k_expand_spd;
-                ring.alpha  *= k_ring_fade;
-            }
-
-            // Spawn helper — silently drops if all slots are taken
-            auto spawn = [&](float r, float a)
-            {
-                for (auto& ring : pulse_rings_)
-                    if (ring.alpha < 0.01f) { ring.radius = r; ring.alpha = a; return; }
-            };
-
-            if (beat_hit)
-            {
-                spawn(mem_r, 1.0f);
-                spawn(mem_r * 0.86f, 0.65f);  // trailing inner ring launched simultaneously
-            }
-            if (onset_hit && !beat_hit)
-                spawn(mem_r, 0.68f);
-
-            // ── Build corona: 64 radial spokes, coloured by frequency band ───────
-            // k_flare ensures every spoke pops outward on a beat even when that
-            // frequency band is quiet — creating a uniform starburst on each hit.
-            // A slow rotation keeps the display alive during sustained quiet passages.
-            const float rot = time * 0.40f;
+            const int   N           = current_symmetry_;
+            const float full_sector = k_two_pi / static_cast<float>(N);  // 2π/N
+            const float half_span   = full_sector * 0.5f;                // π/N
+            const float base_rot    = time * 0.06f;                      // slow overall drift
+            const float hue_offset  = std::fmod(time * 0.07f, 1.0f);
 
             auto hsv_rgb = [](float h, float s, float v) -> std::array<float, 3>
             {
@@ -649,91 +627,68 @@ void Renderer::render() noexcept
                 return {r, g, b};
             };
 
-            for (int i = 0; i < k_corona_n; ++i)
+            // Centre vertex — bass-tinted, near-transparent anchor
             {
-                const float angle = k_two_pi * static_cast<float>(i)
-                                    / static_cast<float>(k_corona_n) + rot;
-                const float ca = std::cos(angle), sa = std::sin(angle);
+                const auto cc = hsv_rgb(hue_offset, 0.55f, bass_norm * 0.50f);
+                kal_data_[0] = 0.0f; kal_data_[1] = 0.0f;
+                kal_data_[2] = cc[0]; kal_data_[3] = cc[1];
+                kal_data_[4] = cc[2]; kal_data_[5] = 0.08f + bass_norm * 0.12f;
+            }
 
-                const float t    = static_cast<float>(i) / static_cast<float>(k_corona_n - 1);
-                const float freq = 40.0f * std::pow(8000.0f / 40.0f, t);
+            // Arc vertices: log-spaced 20 Hz–20 kHz along the half-sector angle
+            for (int i = 0; i < k_kal_segs; ++i)
+            {
+                const float t     = static_cast<float>(i) / static_cast<float>(k_kal_segs - 1);
+                const float angle = t * half_span;  // [0, π/N]
+
+                const float freq = 20.0f * std::pow(20000.0f / 20.0f, t);
                 const int   bin  = std::clamp(static_cast<int>(freq / k_bin_hz),
-                                              1, static_cast<int>(dsp::k_spectrum_bins) - 1);
-                const int lo = std::max(1, bin - 2);
-                const int hi = std::min(static_cast<int>(dsp::k_spectrum_bins) - 1, bin + 2);
+                                              0, static_cast<int>(dsp::k_spectrum_bins) - 1);
+                const int lo = std::max(0, bin - 1);
+                const int hi = std::min(static_cast<int>(dsp::k_spectrum_bins) - 1, bin + 1);
                 float peak = k_min_db;
                 for (int b = lo; b <= hi; ++b)
                     peak = std::max<float>(peak, spectrum[static_cast<size_t>(b)]);
-                const float energy = std::clamp((peak - k_min_db) / (k_max_db - k_min_db),
-                                               0.0f, 1.0f);
+                const float amp = std::clamp((peak - k_min_db) / (k_max_db - k_min_db),
+                                             0.0f, 1.0f);
 
-                const float r_base = mem_r + 0.025f;
-                const float r_tip  = std::min(r_base + energy * k_spoke_len + impulse * k_flare,
-                                              k_outer_r - 0.012f);
+                // Beat adds a uniform outward flare so the whole shape blooms on hits
+                const float r   = k_r_min + amp * (k_r_max - k_r_min) + beat_kick_ * 0.06f;
+                const float ca  = std::cos(angle), sa = std::sin(angle);
+                const float hue = std::fmod(t + hue_offset, 1.0f);
+                const auto  col = hsv_rgb(hue, 0.90f, 0.35f + amp * 0.65f);
+                const float a   = 0.20f + amp * 0.80f;
 
-                const auto  col    = hsv_rgb(t, 0.80f, 0.40f + energy * 0.60f);
-                const float tip_a  = std::min(0.15f + energy * 0.85f + impulse * 0.40f, 1.0f);
-
-                const size_t vi = static_cast<size_t>(i) * 12;
-                corona_data_[vi + 0]  = r_base * ca;
-                corona_data_[vi + 1]  = r_base * sa;
-                corona_data_[vi + 2]  = col[0] * 0.25f;
-                corona_data_[vi + 3]  = col[1] * 0.25f;
-                corona_data_[vi + 4]  = col[2] * 0.25f;
-                corona_data_[vi + 5]  = tip_a  * 0.15f;
-                corona_data_[vi + 6]  = r_tip * ca;
-                corona_data_[vi + 7]  = r_tip * sa;
-                corona_data_[vi + 8]  = col[0];
-                corona_data_[vi + 9]  = col[1];
-                corona_data_[vi + 10] = col[2];
-                corona_data_[vi + 11] = tip_a;
+                const size_t vi   = (static_cast<size_t>(i) + 1) * 6;
+                kal_data_[vi + 0] = r * ca;
+                kal_data_[vi + 1] = r * sa;
+                kal_data_[vi + 2] = col[0];
+                kal_data_[vi + 3] = col[1];
+                kal_data_[vi + 4] = col[2];
+                kal_data_[vi + 5] = a;
             }
 
-            glBindBuffer(GL_ARRAY_BUFFER, corona_vbo_);
+            glBindBuffer(GL_ARRAY_BUFFER, kal_vbo_);
             glBufferSubData(GL_ARRAY_BUFFER, 0,
-                static_cast<GLsizeiptr>(corona_data_.size() * sizeof(float)),
-                corona_data_.data());
-            web_shader_->bind();
-            glBindVertexArray(corona_vao_);
-            glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(k_corona_n * 2));
+                static_cast<GLsizeiptr>(kal_data_.size() * sizeof(float)),
+                kal_data_.data());
 
-            // ── Ripple rings ──────────────────────────────────────────────────────
-            pulse_shader_->bind();
-            glBindVertexArray(pulse_vao_);
-            const GLsizei k_segs = static_cast<GLsizei>(k_pulse_segs);
+            kal_shader_->bind();
+            glBindVertexArray(kal_vao_);
+            const GLsizei k_fan_verts = static_cast<GLsizei>(k_kal_segs + 1);
 
-            for (const auto& ring : pulse_rings_)
+            // ⚡ Performance note: 2N draw calls but each touches the same VBO with
+            // different uniforms. The GPU reads the same 774 bytes of geometry every
+            // call — it fits comfortably in L1 cache, so the repeated reads are free.
+            for (int k = 0; k < N; ++k)
             {
-                if (ring.alpha < 0.01f) continue;
-                glUniform1f(pulse_uniforms_.radius, ring.radius);
-                glUniform4f(pulse_uniforms_.colour, 0.40f, 0.85f, 1.0f, ring.alpha * 0.90f);
-                glDrawArrays(GL_LINE_LOOP, 0, k_segs);
+                const float sector_angle = static_cast<float>(k) * full_sector + base_rot;
+                glUniform1f(kal_uniforms_.angle,  sector_angle);
+                glUniform1f(kal_uniforms_.mirror, 0.0f);
+                glDrawArrays(GL_TRIANGLE_FAN, 0, k_fan_verts);
+                glUniform1f(kal_uniforms_.mirror, 1.0f);
+                glDrawArrays(GL_TRIANGLE_FAN, 0, k_fan_verts);
             }
-
-            // ── 3 staggered membrane rings ────────────────────────────────────────
-            // ⚡ Performance note: each ring uses impulse^(1 + i*0.3). As impulse
-            // decays frame-by-frame, higher powers decay faster — inner rings spring
-            // back first, giving the illusion of a thick vibrating cone in 3D.
-            for (int i = 0; i < 3; ++i)
-            {
-                const float staggered = std::pow(impulse, 1.0f + static_cast<float>(i) * 0.30f);
-                const float r         = k_base_r + bass_norm * 0.06f + staggered * 0.32f;
-                const float hot       = std::min(bass_norm * 0.4f + staggered * 0.9f, 1.0f);
-                const float alpha     = (0.95f - static_cast<float>(i) * 0.20f)
-                                        * (0.65f + hot * 0.35f);
-                glUniform1f(pulse_uniforms_.radius, r);
-                glUniform4f(pulse_uniforms_.colour,
-                    0.55f + hot * 0.45f,
-                    0.75f + hot * 0.25f,
-                    1.00f,
-                    alpha);
-                glDrawArrays(GL_LINE_LOOP, 0, k_segs);
-            }
-
-            // Outer basket — anchor ring that gives the whole display a sense of scale
-            glUniform1f(pulse_uniforms_.radius, k_outer_r);
-            glUniform4f(pulse_uniforms_.colour, 0.20f, 0.35f, 0.55f, 0.30f);
-            glDrawArrays(GL_LINE_LOOP, 0, k_segs);
 
             break;
         }
