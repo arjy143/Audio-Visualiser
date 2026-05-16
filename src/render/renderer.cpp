@@ -175,7 +175,11 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
             unit_circle[static_cast<size_t>(i) * 2 + 1] = std::sin(a);
         }
         pulse_shader_   = std::make_unique<ShaderProgram>("shaders/pulse.vert", "shaders/pulse.frag");
-        pulse_uniforms_ = { pulse_shader_->uniform("uRadius"), pulse_shader_->uniform("uColour") };
+        pulse_uniforms_ = {
+            pulse_shader_->uniform("uRadius"),
+            pulse_shader_->uniform("uColour"),
+            pulse_shader_->uniform("uCenter"),
+        };
 
         glGenVertexArrays(1, &pulse_vao_);
         glGenBuffers(1, &pulse_vbo_);
@@ -199,6 +203,24 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
     glBindBuffer(GL_ARRAY_BUFFER, kal_vbo_);
     glBufferData(GL_ARRAY_BUFFER,
         static_cast<GLsizeiptr>(kal_data_.size() * sizeof(float)),
+        nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+        reinterpret_cast<const void*>(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+
+    // Nova spike shader + VAO/VBO — same (x,y,r,g,b,a) per-vertex format, rebuilt every frame
+    nova_shader_   = std::make_unique<ShaderProgram>("shaders/nova.vert", "shaders/web.frag");
+    nova_uniforms_ = { nova_shader_->uniform("uCenter"), nova_shader_->uniform("uScale") };
+
+    glGenVertexArrays(1, &spike_vao_);
+    glGenBuffers(1, &spike_vbo_);
+    glBindVertexArray(spike_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, spike_vbo_);
+    glBufferData(GL_ARRAY_BUFFER,
+        static_cast<GLsizeiptr>(spike_data_.size() * sizeof(float)),
         nullptr, GL_DYNAMIC_DRAW);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
@@ -281,6 +303,8 @@ Renderer::~Renderer()
 {
     glDeleteFramebuffers(1, &milk_fbo_);
     glDeleteTextures(1, &milk_tex_);
+    glDeleteBuffers(1, &spike_vbo_);
+    glDeleteVertexArrays(1, &spike_vao_);
     glDeleteBuffers(1, &orb_vbo_);
     glDeleteVertexArrays(1, &orb_vao_);
     glDeleteBuffers(1, &kal_vbo_);
@@ -367,7 +391,7 @@ void Renderer::render() noexcept
     // Auto-advance every ~90 s, but only on a beat so the cut feels musical.
     // M key forces an immediate switch at any time.
     constexpr int k_mode_duration = 90 * 60;   // frames (~90 s at 60 fps)
-    constexpr int k_num_modes     = 8;
+    constexpr int k_num_modes     = 9;
 
     ++mode_frames_;
     const bool key_m     = glfwGetKey(window_, GLFW_KEY_M) == GLFW_PRESS;
@@ -583,6 +607,7 @@ void Renderer::render() noexcept
             // Inner glow ring — pulses blue-white on beats, anchors the visual centre
             pulse_shader_->bind();
             glBindVertexArray(pulse_vao_);
+            glUniform2f(pulse_uniforms_.center, 0.0f, 0.0f);
             glUniform1f(pulse_uniforms_.radius, k_r_inner * (1.0f - beat_kick_ * 0.06f));
             glUniform4f(pulse_uniforms_.colour,
                 0.65f, 0.85f, 1.0f,
@@ -715,6 +740,209 @@ void Renderer::render() noexcept
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, milk_fbo_);
             glBlitFramebuffer(0, 0, width_, height_, 0, 0, width_, height_,
                               GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            break;
+        }
+
+        case 8: // Nova — beehive of 19 close-packed circles, reactive to bass and transients
+        {
+            // 🧠 Concept: the hex close-pack has two layers of circles (1 + 6 + 12 = 19).
+            // hub_r = d/2 at rest, so adjacent circles exactly touch.  beat_kick_ inflates
+            // hub_r so circles swell and overlap on every bass hit.  onset_kick_ fires
+            // short spikes outward from the hub ring edge — barely visible during quiet
+            // passages, but they burst far beyond the circle boundary on a snare hit.
+            // Shockwave rings emanate from screen centre and pass through the lattice.
+            constexpr float k_d           = 0.32f;              // hex centre-to-centre spacing
+            constexpr float k_h           = k_d * 0.86602540f;  // k_d × √3/2
+            constexpr float k_cs          = 0.45f;              // nova.vert spike scale
+            constexpr float k_extension   = 0.55f;              // max spike protrusion in data space (freq)
+            constexpr float k_beat        = 0.42f;              // bass beat adds this protrusion (data space)
+            constexpr float k_burst       = 0.70f;              // onset spike burst in data space
+            constexpr float k_ring_expand = 0.022f;
+            constexpr float k_ring_fade   = 0.915f;
+            constexpr float k_bin_hz      = 48000.0f / static_cast<float>(dsp::k_FFT_size);
+
+            // hub_r starts at exactly d/2 so circles touch at rest.
+            // beat_kick_ inflates it — at peak beat, circles overlap by ~25% of their diameter.
+            const float hub_r   = k_d * 0.5f + beat_kick_ * 0.042f + bass_norm * 0.018f;
+            // Spike base in data space that maps to hub_r in NDC after k_cs scale.
+            // Spikes therefore always START at the circle edge, growing outward only.
+            const float k_inner = hub_r / k_cs;
+
+            // ── Update shockwave ring pool ─────────────────────────────────────
+            for (auto& ring : nova_rings_)
+            {
+                if (ring.alpha < 0.01f) continue;
+                ring.radius += k_ring_expand;
+                ring.alpha  *= k_ring_fade;
+            }
+            auto spawn_ring = [&](float a)
+            {
+                for (auto& ring : nova_rings_)
+                    if (ring.alpha < 0.01f) { ring.radius = 0.0f; ring.alpha = a; return; }
+            };
+            if (beat_hit)
+            {
+                spawn_ring(1.0f);
+                if (bass_norm > 0.55f) spawn_ring(0.55f);
+            }
+            if (onset_hit && !beat_hit) spawn_ring(0.65f);
+
+            // ── HSV helper ────────────────────────────────────────────────────
+            auto hsv_rgb = [](float h, float s, float v) -> std::array<float, 3>
+            {
+                const float c = v * s;
+                const float x = c * (1.0f - std::abs(std::fmod(h * 6.0f, 2.0f) - 1.0f));
+                const float m = v - c;
+                float r = m, g = m, b = m;
+                switch (static_cast<int>(h * 6.0f) % 6)
+                {
+                    case 0: r += c; g += x; break;
+                    case 1: r += x; g += c; break;
+                    case 2: g += c; b += x; break;
+                    case 3: g += x; b += c; break;
+                    case 4: r += x; b += c; break;
+                    case 5: r += c; b += x; break;
+                }
+                return {r, g, b};
+            };
+
+            const float hue_drift = std::fmod(time * 0.04f, 1.0f);
+
+            // ── Build spike geometry (in data space, scaled by k_cs in shader) ─
+            // Base vertex is at k_inner (= hub ring edge after scaling).
+            // Tip vertex extends beyond by frequency amplitude + onset impulse.
+            // At rest the two coincide — no protrusion, the hub ring dominates.
+            for (int i = 0; i < k_nova_spikes; ++i)
+            {
+                const float t     = static_cast<float>(i) / static_cast<float>(k_nova_spikes);
+                const float angle = k_two_pi * t;
+                const float ca    = std::cos(angle), sa = std::sin(angle);
+
+                const float freq = 20.0f * std::pow(20000.0f / 20.0f, t);
+                const int   bin  = std::clamp(static_cast<int>(freq / k_bin_hz),
+                                              0, static_cast<int>(dsp::k_spectrum_bins) - 1);
+                const int lo = std::max(0, bin - 1);
+                const int hi = std::min(static_cast<int>(dsp::k_spectrum_bins) - 1, bin + 1);
+                float peak = k_min_db;
+                for (int b = lo; b <= hi; ++b)
+                    peak = std::max<float>(peak, spectrum[static_cast<size_t>(b)]);
+                const float amp = std::clamp((peak - k_min_db) / (k_max_db - k_min_db),
+                                             0.0f, 1.0f);
+
+                // Protrusion beyond hub edge:
+                //   freq energy → steady visual spectrum representation
+                //   beat_kick_  → bass hit swells circles AND extends spikes
+                //   onset_kick_ → snappy full-burst on transients (fastest decay)
+                const float r_tip = std::min(
+                    k_inner + amp * k_extension + beat_kick_ * k_beat + onset_kick_ * k_burst,
+                    0.96f);
+
+                const float hue   = std::fmod(t + hue_drift, 1.0f);
+                const auto  col   = hsv_rgb(hue, 0.90f, 0.35f + amp * 0.65f);
+                const float tip_a = std::min(
+                    0.15f + amp * 0.70f + beat_kick_ * 0.55f + onset_kick_ * 0.65f,
+                    1.0f);
+
+                const size_t vi = static_cast<size_t>(i) * 12;
+                spike_data_[vi + 0]  = k_inner * ca;
+                spike_data_[vi + 1]  = k_inner * sa;
+                spike_data_[vi + 2]  = col[0] * 0.15f;
+                spike_data_[vi + 3]  = col[1] * 0.15f;
+                spike_data_[vi + 4]  = col[2] * 0.15f;
+                spike_data_[vi + 5]  = 0.0f;              // base is invisible — hub ring draws here
+                spike_data_[vi + 6]  = r_tip * ca;
+                spike_data_[vi + 7]  = r_tip * sa;
+                spike_data_[vi + 8]  = col[0];
+                spike_data_[vi + 9]  = col[1];
+                spike_data_[vi + 10] = col[2];
+                spike_data_[vi + 11] = tip_a;
+            }
+
+            glBindBuffer(GL_ARRAY_BUFFER, spike_vbo_);
+            glBufferSubData(GL_ARRAY_BUFFER, 0,
+                static_cast<GLsizeiptr>(spike_data_.size() * sizeof(float)),
+                spike_data_.data());
+
+            // ── 19-circle hex pack positions (ring 0 + ring 1 + ring 2) ────────
+            // 🧠 All 19 orbs share the same VBO.  Only uCenter changes per draw
+            // call — zero extra geometry or memory beyond the original 960 bytes.
+            // The whole lattice rotates at ~1.7°/s to stay visually alive at rest.
+            const float rot = time * 0.03f;
+            const float cr  = std::cos(rot), sr = std::sin(rot);
+            auto rv = [&](float x, float y) -> std::pair<float, float> {
+                return { cr * x - sr * y, sr * x + cr * y };
+            };
+
+            const std::array<std::pair<float, float>, 19> positions{{
+                // Ring 0 — centre
+                rv(  0.0f,       0.0f    ),
+                // Ring 1 — 6 neighbours
+                rv(  k_d,        0.0f    ),
+                rv(  k_d * 0.5f, k_h     ),
+                rv( -k_d * 0.5f, k_h     ),
+                rv( -k_d,        0.0f    ),
+                rv( -k_d * 0.5f, -k_h    ),
+                rv(  k_d * 0.5f, -k_h    ),
+                // Ring 2 — 12 outer circles (alternating at 2d and d√3 from centre)
+                rv(  2.0f * k_d,  0.0f       ),   // E2
+                rv(  1.5f * k_d,  k_h        ),   // ENE
+                rv(  k_d,         2.0f * k_h ),   // NNE
+                rv(  0.0f,        2.0f * k_h ),   // N
+                rv( -k_d,         2.0f * k_h ),   // NNW
+                rv( -1.5f * k_d,  k_h        ),   // WNW
+                rv( -2.0f * k_d,  0.0f       ),   // W2
+                rv( -1.5f * k_d, -k_h        ),   // WSW
+                rv( -k_d,        -2.0f * k_h ),   // SSW
+                rv(  0.0f,       -2.0f * k_h ),   // S
+                rv(  k_d,        -2.0f * k_h ),   // SSE
+                rv(  1.5f * k_d, -k_h        ),   // ESE
+            }};
+
+            // Draw spikes for all 19 orbs — one VBO upload, 19 uniform changes
+            nova_shader_->bind();
+            glBindVertexArray(spike_vao_);
+            const GLsizei k_spike_verts = static_cast<GLsizei>(k_nova_spikes * 2);
+            for (const auto& [cx, cy] : positions)
+            {
+                glUniform2f(nova_uniforms_.center, cx, cy);
+                glUniform1f(nova_uniforms_.scale,  k_cs);
+                glDrawArrays(GL_LINES, 0, k_spike_verts);
+            }
+
+            // Draw hub ring at each orb — this IS the "circle" of the beehive.
+            // Colour cycles slowly through the rainbow so the lattice glows.
+            pulse_shader_->bind();
+            glBindVertexArray(pulse_vao_);
+            const GLsizei k_segs = static_cast<GLsizei>(k_pulse_segs);
+            const float hub_a = 0.40f + beat_kick_ * 0.55f + bass_norm * 0.15f;
+
+            for (int i = 0; i < static_cast<int>(positions.size()); ++i)
+            {
+                const auto& [cx, cy] = positions[static_cast<size_t>(i)];
+                const float hue = std::fmod(
+                    static_cast<float>(i) / static_cast<float>(positions.size()) + hue_drift,
+                    1.0f);
+                const auto col = hsv_rgb(hue, 0.70f, 0.80f);
+                glUniform2f(pulse_uniforms_.center, cx, cy);
+                glUniform1f(pulse_uniforms_.radius, hub_r);
+                glUniform4f(pulse_uniforms_.colour, col[0], col[1], col[2], hub_a);
+                glDrawArrays(GL_LINE_LOOP, 0, k_segs);
+            }
+
+            // Shockwave rings from screen centre pass through the lattice
+            glUniform2f(pulse_uniforms_.center, 0.0f, 0.0f);
+            for (const auto& ring : nova_rings_)
+            {
+                if (ring.alpha < 0.01f) continue;
+                const float t  = std::min(ring.radius, 1.0f);
+                const float rr = 1.0f - 0.40f * t;
+                const float gg = 0.90f - 0.68f * t;
+                const float bb = 0.80f + 0.20f * t;
+                glUniform1f(pulse_uniforms_.radius, ring.radius);
+                glUniform4f(pulse_uniforms_.colour, rr, gg, bb, ring.alpha * 0.88f);
+                glDrawArrays(GL_LINE_LOOP, 0, k_segs);
+            }
+
             break;
         }
 

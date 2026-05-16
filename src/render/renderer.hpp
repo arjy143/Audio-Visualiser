@@ -73,7 +73,7 @@ class Renderer
     std::array<float, (k_kal_segs + 1) * 6> kal_data_{};  // 1 centre + k_kal_segs arc verts
 
     std::unique_ptr<ShaderProgram> pulse_shader_;
-    struct PulseUniforms { GLint radius, colour; } pulse_uniforms_{};
+    struct PulseUniforms { GLint radius, colour, center; } pulse_uniforms_{};
 
     std::unique_ptr<ShaderProgram> kal_shader_;
     struct KalUniforms { GLint angle, mirror; } kal_uniforms_{};
@@ -97,7 +97,23 @@ class Renderer
 
     std::unique_ptr<ShaderProgram> web_shader_;
 
-    // Visual mode: 0=Aura, 1=Tunnel, 2=Bars, 3=Burst, 4=Iris, 5=Prism, 6=Web, 7=Milk
+    // Mode 8: Nova — radial spike lattice + shockwave rings driven by bass + transients
+    // Each ring expands outward from the centre and fades, spawned on every beat hit.
+    // Spikes show the spectrum continuously; onset_kick_ fires them all simultaneously.
+    static constexpr int k_nova_rings  = 8;
+    static constexpr int k_nova_spikes = 80;
+
+    struct NovaRing { float radius = 0.0f; float alpha = 0.0f; };
+    std::array<NovaRing, k_nova_rings> nova_rings_{};
+
+    GLuint spike_vao_{0};
+    GLuint spike_vbo_{0};
+    std::array<float, k_nova_spikes * 2 * 6> spike_data_{};  // GL_LINES: 2 verts × 6 floats
+
+    std::unique_ptr<ShaderProgram> nova_shader_;
+    struct NovaUniforms { GLint center, scale; } nova_uniforms_{};
+
+    // Visual mode: 0=Aura, 1=Tunnel, 2=Bars, 3=Burst, 4=Iris, 5=Prism, 6=Web, 7=Milk, 8=Nova
     int  mode_{0};
     int  mode_frames_{0};
     bool key_m_prev_{false};
