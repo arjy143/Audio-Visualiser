@@ -12,8 +12,9 @@ namespace dsp
 class FFTPlan
 {
     size_t n_;
+    float  n_log2_x2_{0.0f};  // 2·log₂(n) — used by the fast magnitude-to-dB path
 
-    std::vector<std::complex<float>> buf_; 
+    std::vector<std::complex<float>> buf_;
 
     //precomputed twiddle factors
     std::vector<std::complex<float>> twiddle_;
