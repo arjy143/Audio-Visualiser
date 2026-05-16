@@ -113,6 +113,26 @@ class Renderer
     std::unique_ptr<ShaderProgram> nova_shader_;
     struct NovaUniforms { GLint center, scale; } nova_uniforms_{};
 
+    // Precomputed lookup tables — built once in constructor to avoid per-frame
+    // pow() / cos() / sin() inside the vertex-building loops.
+    // Declared after all k_* constants so array sizes are resolved.
+    std::array<int,   k_orb_n>          orb_bins_{};
+    std::array<float, k_orb_n>          orb_cos_{};
+    std::array<float, k_orb_n>          orb_sin_{};
+
+    std::array<int,   k_nova_spikes>    nova_bins_{};
+    std::array<float, k_nova_spikes>    nova_cos_{};
+    std::array<float, k_nova_spikes>    nova_sin_{};
+
+    std::array<int,   k_web_n>          web_bins_{};
+    std::array<float, k_web_n>          web_cos_{};
+    std::array<float, k_web_n>          web_sin_{};
+
+    std::array<int,   k_kal_segs>       kal_bins_{};
+
+    // 3-bin-max normalised amplitude, rebuilt once per frame and shared by all modes.
+    std::array<float, dsp::k_spectrum_bins> smooth_spec_{};
+
     // Visual mode: 0=Aura, 1=Tunnel, 2=Bars, 3=Burst, 4=Iris, 5=Prism, 6=Web, 7=Milk, 8=Nova
     int  mode_{0};
     int  mode_frames_{0};

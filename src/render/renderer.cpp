@@ -290,6 +290,64 @@ Renderer::Renderer(dsp::Analyser& analyser, const char* title, int width, int he
         milk_shader_->uniform("uTime"),
     };
 
+    // ── Precompute frequency→bin + trig tables ────────────────────────────────
+    // ⚡ Performance note: std::pow() takes ~50 ns; there are 1244 calls per frame
+    // across all modes (1024 Iris + 128 Prism + 80 Nova + 12 Web).  Computing them
+    // once here and doing a plain array lookup in render() saves ~62 µs/frame.
+    {
+        constexpr float k_bin_hz  = 48000.0f / static_cast<float>(dsp::k_FFT_size);
+        constexpr float k_two_pi  = 2.0f * 3.14159265f;
+        const     int   k_last    = static_cast<int>(dsp::k_spectrum_bins) - 1;
+
+        // Iris: k_orb_n log-spaced samples 20 Hz – 20 kHz + matching cos/sin
+        for (int i = 0; i < k_orb_n; ++i)
+        {
+            const float t    = static_cast<float>(i) / static_cast<float>(k_orb_n);
+            const float freq = 20.0f * std::pow(1000.0f, t);
+            orb_bins_[static_cast<size_t>(i)] =
+                std::clamp(static_cast<int>(freq / k_bin_hz), 0, k_last);
+            const float a = k_two_pi * t;
+            orb_cos_[static_cast<size_t>(i)] = std::cos(a);
+            orb_sin_[static_cast<size_t>(i)] = std::sin(a);
+        }
+
+        // Nova spikes: k_nova_spikes log-spaced 20 Hz – 20 kHz + cos/sin
+        for (int i = 0; i < k_nova_spikes; ++i)
+        {
+            const float t    = static_cast<float>(i) / static_cast<float>(k_nova_spikes);
+            const float freq = 20.0f * std::pow(1000.0f, t);
+            nova_bins_[static_cast<size_t>(i)] =
+                std::clamp(static_cast<int>(freq / k_bin_hz), 0, k_last);
+            const float a = k_two_pi * t;
+            nova_cos_[static_cast<size_t>(i)] = std::cos(a);
+            nova_sin_[static_cast<size_t>(i)] = std::sin(a);
+        }
+
+        // Web: k_web_n log-spaced 40 Hz – 8 kHz + cos/sin on the regular polygon
+        constexpr float k_web_lo = 40.0f, k_web_hi = 8000.0f;
+        for (int i = 0; i < k_web_n; ++i)
+        {
+            const float t    = static_cast<float>(i) / static_cast<float>(k_web_n - 1);
+            const float freq = k_web_lo * std::pow(k_web_hi / k_web_lo, t);
+            web_bins_[static_cast<size_t>(i)] =
+                std::clamp(static_cast<int>(freq / k_bin_hz), 1, k_last);
+            const float a = k_two_pi * static_cast<float>(i) / static_cast<float>(k_web_n)
+                            - 3.14159265f * 0.5f;
+            web_cos_[static_cast<size_t>(i)] = std::cos(a);
+            web_sin_[static_cast<size_t>(i)] = std::sin(a);
+        }
+
+        // Prism kaleidoscope: k_kal_segs log-spaced 20 Hz – 20 kHz
+        // Sector angle depends on current_symmetry_ (dynamic), so only bins are cached.
+        for (int i = 0; i < k_kal_segs; ++i)
+        {
+            const float t    = static_cast<float>(i) / static_cast<float>(k_kal_segs - 1);
+            const float freq = 20.0f * std::pow(1000.0f, t);
+            kal_bins_[static_cast<size_t>(i)] =
+                std::clamp(static_cast<int>(freq / k_bin_hz), 0, k_last);
+        }
+    }
+
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     for (const GLuint fbo : {scene_fbo_, ping_fbo_, pong_fbo_, milk_fbo_})
     {
@@ -386,6 +444,23 @@ void Renderer::render() noexcept
             onset_kick_ = 0.9f;
     }
     const bool onset_hit = onset_kick_ >= 0.88f;  // true only on the frame it was set
+
+    // ── Pre-smooth spectrum — one pass shared by all modes ────────────────────
+    // ⚡ Performance note: replaces per-mode inline 3-bin-max+normalize loops.
+    // Each smooth_spec_[i] = normalised max(spectrum[i-1..i+1]).
+    {
+        const int k_last = static_cast<int>(dsp::k_spectrum_bins) - 1;
+        for (int i = 0; i <= k_last; ++i)
+        {
+            const int lo = (i > 0)      ? i - 1 : 0;
+            const int hi = (i < k_last) ? i + 1 : k_last;
+            float pk = spectrum[static_cast<size_t>(lo)];
+            for (int b = lo + 1; b <= hi; ++b)
+                pk = std::max(pk, spectrum[static_cast<size_t>(b)]);
+            smooth_spec_[static_cast<size_t>(i)] =
+                std::clamp((pk - k_min_db) / (k_max_db - k_min_db), 0.0f, 1.0f);
+        }
+    }
 
     // ── Mode switching ────────────────────────────────────────────
     // Auto-advance every ~90 s, but only on a beat so the cut feels musical.
@@ -529,12 +604,11 @@ void Renderer::render() noexcept
             // quad with the next pair — no overdraw, so alpha values are exact.
             // Log-spacing maps 20 Hz–20 kHz uniformly around the circle so bass and
             // treble each get equal angular real-estate.
-            constexpr float k_bin_hz  = 48000.0f / static_cast<float>(dsp::k_FFT_size);
-            constexpr float k_r_inner = 0.22f;   // constant inner edge of the ring
-            constexpr float k_r_scale = 0.60f;   // max additional outward reach
-            constexpr float k_r_beat  = 0.05f;   // extra push from beat impulse
+            constexpr float k_r_inner = 0.22f;
+            constexpr float k_r_scale = 0.60f;
+            constexpr float k_r_beat  = 0.05f;
 
-            const float hue_offset = std::fmod(time * 0.05f, 1.0f);  // slow colour drift
+            const float hue_offset = std::fmod(time * 0.05f, 1.0f);
 
             auto hsv_rgb = [](float h, float s, float v) -> std::array<float, 3>
             {
@@ -557,37 +631,25 @@ void Renderer::render() noexcept
             // Build interleaved strip: inner[i], outer[i], ..., closing pair
             for (int i = 0; i <= k_orb_n; ++i)
             {
-                const int   ci    = i % k_orb_n;
-                const float t     = static_cast<float>(ci) / static_cast<float>(k_orb_n);
-                const float freq  = 20.0f * std::pow(20000.0f / 20.0f, t);
-                const int   bin   = std::clamp(static_cast<int>(freq / k_bin_hz),
-                                               0, static_cast<int>(dsp::k_spectrum_bins) - 1);
-                // Average 3 adjacent bins to smooth single-bin noise spikes
-                const int lo = std::max(0, bin - 1);
-                const int hi = std::min(static_cast<int>(dsp::k_spectrum_bins) - 1, bin + 1);
-                float peak = k_min_db;
-                for (int b = lo; b <= hi; ++b)
-                    peak = std::max<float>(peak, spectrum[static_cast<size_t>(b)]);
-                const float amp = std::clamp((peak - k_min_db) / (k_max_db - k_min_db),
-                                             0.0f, 1.0f);
+                const int    ci  = i % k_orb_n;
+                const size_t si  = static_cast<size_t>(ci);
+                const float  amp = smooth_spec_[static_cast<size_t>(orb_bins_[si])];
+                const float  t   = static_cast<float>(ci) / static_cast<float>(k_orb_n);
 
                 const float r_out = k_r_inner + amp * k_r_scale + beat_kick_ * k_r_beat;
-                const float angle = k_two_pi * t;
-                const float ca    = std::cos(angle), sa = std::sin(angle);
-
+                const float ca    = orb_cos_[si];
+                const float sa    = orb_sin_[si];
                 const float hue   = std::fmod(t + hue_offset, 1.0f);
                 const auto  col   = hsv_rgb(hue, 0.88f, 0.35f + amp * 0.65f);
                 const float out_a = 0.30f + amp * 0.70f;
 
                 const size_t vi = static_cast<size_t>(i) * 12;
-                // Inner vertex: dim cool blue — constant anchor edge
                 orb_data_[vi + 0] = k_r_inner * ca;
                 orb_data_[vi + 1] = k_r_inner * sa;
                 orb_data_[vi + 2] = 0.50f;
                 orb_data_[vi + 3] = 0.72f;
                 orb_data_[vi + 4] = 1.00f;
                 orb_data_[vi + 5] = 0.08f + bass_norm * 0.22f;
-                // Outer vertex: frequency-mapped rainbow colour
                 orb_data_[vi + 6]  = r_out * ca;
                 orb_data_[vi + 7]  = r_out * sa;
                 orb_data_[vi + 8]  = col[0];
@@ -624,9 +686,8 @@ void Renderer::render() noexcept
             // Together they tile one full sector of 2π/N; N such pairs cover 2π.
             // The kal.vert shader applies the flip and rotation — zero CPU geometry
             // duplication. Only the fundamental arc is ever uploaded.
-            constexpr float k_r_min  = 0.08f;   // silence → petals retract to small nub
-            constexpr float k_r_max  = 0.90f;   // loud signal → petals reach edge of screen
-            constexpr float k_bin_hz = 48000.0f / static_cast<float>(dsp::k_FFT_size);
+            constexpr float k_r_min  = 0.08f;
+            constexpr float k_r_max  = 0.90f;
 
             const int   N           = current_symmetry_;
             const float full_sector = k_two_pi / static_cast<float>(N);  // 2π/N
@@ -671,17 +732,7 @@ void Renderer::render() noexcept
             {
                 const float t     = static_cast<float>(i) / static_cast<float>(k_kal_segs - 1);
                 const float angle = t * half_span;  // [0, π/N]
-
-                const float freq = 20.0f * std::pow(20000.0f / 20.0f, t);
-                const int   bin  = std::clamp(static_cast<int>(freq / k_bin_hz),
-                                              0, static_cast<int>(dsp::k_spectrum_bins) - 1);
-                const int lo = std::max(0, bin - 1);
-                const int hi = std::min(static_cast<int>(dsp::k_spectrum_bins) - 1, bin + 1);
-                float peak = k_min_db;
-                for (int b = lo; b <= hi; ++b)
-                    peak = std::max<float>(peak, spectrum[static_cast<size_t>(b)]);
-                const float amp = std::clamp((peak - k_min_db) / (k_max_db - k_min_db),
-                                             0.0f, 1.0f);
+                const float amp   = smooth_spec_[static_cast<size_t>(kal_bins_[static_cast<size_t>(i)])];
 
                 // Bass inflates the minimum petal size so low-end energy is always
                 // visible as a wider base shape, even between transients.
@@ -770,7 +821,6 @@ void Renderer::render() noexcept
             constexpr float k_burst       = 0.70f;              // onset spike burst in data space
             constexpr float k_ring_expand = 0.022f;
             constexpr float k_ring_fade   = 0.915f;
-            constexpr float k_bin_hz      = 48000.0f / static_cast<float>(dsp::k_FFT_size);
 
             // hub_r starts at d/2 so circles touch at rest.
             // bass_norm drives it directly — every kick drum raises bass_norm and
@@ -827,20 +877,11 @@ void Renderer::render() noexcept
             // At rest the two coincide — no protrusion, the hub ring dominates.
             for (int i = 0; i < k_nova_spikes; ++i)
             {
-                const float t     = static_cast<float>(i) / static_cast<float>(k_nova_spikes);
-                const float angle = k_two_pi * t;
-                const float ca    = std::cos(angle), sa = std::sin(angle);
-
-                const float freq = 20.0f * std::pow(20000.0f / 20.0f, t);
-                const int   bin  = std::clamp(static_cast<int>(freq / k_bin_hz),
-                                              0, static_cast<int>(dsp::k_spectrum_bins) - 1);
-                const int lo = std::max(0, bin - 1);
-                const int hi = std::min(static_cast<int>(dsp::k_spectrum_bins) - 1, bin + 1);
-                float peak = k_min_db;
-                for (int b = lo; b <= hi; ++b)
-                    peak = std::max<float>(peak, spectrum[static_cast<size_t>(b)]);
-                const float amp = std::clamp((peak - k_min_db) / (k_max_db - k_min_db),
-                                             0.0f, 1.0f);
+                const size_t si  = static_cast<size_t>(i);
+                const float  ca  = nova_cos_[si];
+                const float  sa  = nova_sin_[si];
+                const float  amp = smooth_spec_[static_cast<size_t>(nova_bins_[si])];
+                const float  t   = static_cast<float>(i) / static_cast<float>(k_nova_spikes);
 
                 // Protrusion beyond hub edge:
                 //   freq energy → steady visual spectrum representation
@@ -965,42 +1006,24 @@ void Renderer::render() noexcept
             // adds more brightness at its pixels. Lines share k_web_n*(k_web_n-1)/2
             // crossing pairs — where many frequencies are simultaneously active the
             // crossing knots accumulate toward white.
+            constexpr float k_base_r = 0.45f;
+            constexpr float k_radial = 0.40f;
+            constexpr float k_alpha  = 0.20f;
 
-            constexpr float k_bin_hz   = 48000.0f / static_cast<float>(dsp::k_FFT_size);
-            constexpr float k_base_r   = 0.45f;   // resting circle radius in NDC
-            constexpr float k_radial   = 0.40f;   // max additional outward push from energy
-            constexpr float k_alpha    = 0.20f;   // per-line alpha; crossings stack this
-            constexpr float k_freq_lo  = 40.0f;
-            constexpr float k_freq_hi  = 8000.0f;
-
-            // Extract energy per band
+            // Extract energy per band using precomputed bin table + smooth_spec_
             float energies[k_web_n];
             for (int i = 0; i < k_web_n; ++i)
-            {
-                const float t    = static_cast<float>(i) / static_cast<float>(k_web_n - 1);
-                const float freq = k_freq_lo * std::pow(k_freq_hi / k_freq_lo, t);
-                const int   bin  = std::clamp(static_cast<int>(freq / k_bin_hz),
-                                              1, static_cast<int>(dsp::k_spectrum_bins) - 1);
-                const int lo = std::max(1, bin - 1);
-                const int hi = std::min(static_cast<int>(dsp::k_spectrum_bins) - 1, bin + 1);
-                float peak = k_min_db;
-                for (int b = lo; b <= hi; ++b)
-                    peak = std::max<float>(peak, spectrum[static_cast<size_t>(b)]);
-                energies[i] = std::clamp((peak - k_min_db) / (k_max_db - k_min_db), 0.0f, 1.0f);
-            }
+                energies[i] = smooth_spec_[static_cast<size_t>(web_bins_[static_cast<size_t>(i)])];
 
-            // Compute vertex positions — each vertex on a regular k_web_n-gon,
-            // displaced outward by its frequency band's energy
+            // Vertex positions: regular k_web_n-gon displaced by band energy.
+            // cos/sin per vertex are precomputed — no per-frame trig.
             float vx[k_web_n], vy[k_web_n];
             for (int i = 0; i < k_web_n; ++i)
             {
-                // Start from top (-π/2) so bass sits at the bottom, treble at top
-                const float angle = k_two_pi * static_cast<float>(i) / static_cast<float>(k_web_n)
-                                    - 3.14159265f * 0.5f;
-                const float r = k_base_r
-                              + energies[i] * k_radial * (1.0f + beat_kick_ * 0.3f);
-                vx[i] = r * std::cos(angle);
-                vy[i] = r * std::sin(angle);
+                const size_t si = static_cast<size_t>(i);
+                const float  r  = k_base_r + energies[i] * k_radial * (1.0f + beat_kick_ * 0.3f);
+                vx[i] = r * web_cos_[si];
+                vy[i] = r * web_sin_[si];
             }
 
             // HSV → RGB, computed on CPU so the fragment shader stays trivial
