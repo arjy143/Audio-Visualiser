@@ -772,9 +772,11 @@ void Renderer::render() noexcept
             constexpr float k_ring_fade   = 0.915f;
             constexpr float k_bin_hz      = 48000.0f / static_cast<float>(dsp::k_FFT_size);
 
-            // hub_r starts at exactly d/2 so circles touch at rest.
-            // beat_kick_ inflates it — at peak beat, circles overlap by ~25% of their diameter.
-            const float hub_r   = k_d * 0.5f + beat_kick_ * 0.042f + bass_norm * 0.018f;
+            // hub_r starts at d/2 so circles touch at rest.
+            // bass_norm drives it directly — every kick drum raises bass_norm and
+            // visibly swells the circles, independent of the beat_hit threshold.
+            // beat_kick_ adds an extra snap on the strongest transient beats.
+            const float hub_r   = k_d * 0.5f + bass_norm * 0.14f + beat_kick_ * 0.05f;
             // Spike base in data space that maps to hub_r in NDC after k_cs scale.
             // Spikes therefore always START at the circle edge, growing outward only.
             const float k_inner = hub_r / k_cs;
