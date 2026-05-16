@@ -652,12 +652,18 @@ void Renderer::render() noexcept
                 return {r, g, b};
             };
 
-            // Centre vertex — bass-tinted, near-transparent anchor
+            // Centre vertex — complementary hue to the petals so it contrasts visually.
+            // All 2N sectors share this vertex, so its alpha accumulates N-fold in the
+            // centre — keep per-sector alpha low so the fill stays readable.
+            // bass_norm drives both colour brightness and alpha: the centre glows and
+            // fills in during sustained bass passages, then fades between hits.
             {
-                const auto cc = hsv_rgb(hue_offset, 0.55f, bass_norm * 0.50f);
+                const float centre_hue = std::fmod(hue_offset + 0.50f, 1.0f);
+                const auto  cc = hsv_rgb(centre_hue, 0.60f, 0.10f + bass_norm * 0.75f);
                 kal_data_[0] = 0.0f; kal_data_[1] = 0.0f;
                 kal_data_[2] = cc[0]; kal_data_[3] = cc[1];
-                kal_data_[4] = cc[2]; kal_data_[5] = 0.08f + bass_norm * 0.12f;
+                kal_data_[4] = cc[2];
+                kal_data_[5] = bass_norm * 0.09f + beat_kick_ * 0.07f;
             }
 
             // Arc vertices: log-spaced 20 Hz–20 kHz along the half-sector angle
@@ -677,12 +683,17 @@ void Renderer::render() noexcept
                 const float amp = std::clamp((peak - k_min_db) / (k_max_db - k_min_db),
                                              0.0f, 1.0f);
 
-                // Beat adds a uniform outward flare so the whole shape blooms on hits
-                const float r   = k_r_min + amp * (k_r_max - k_r_min) + beat_kick_ * 0.06f;
+                // Bass inflates the minimum petal size so low-end energy is always
+                // visible as a wider base shape, even between transients.
+                // Beat flares all petals outward uniformly for a punchy pop.
+                const float r   = k_r_min + bass_norm * 0.12f
+                                  + amp * (k_r_max - k_r_min)
+                                  + beat_kick_ * 0.16f;
                 const float ca  = std::cos(angle), sa = std::sin(angle);
                 const float hue = std::fmod(t + hue_offset, 1.0f);
-                const auto  col = hsv_rgb(hue, 0.90f, 0.35f + amp * 0.65f);
-                const float a   = 0.20f + amp * 0.80f;
+                // Saturation 0.58 gives jewel tones rather than neon — rich but not harsh
+                const auto  col = hsv_rgb(hue, 0.58f, 0.42f + amp * 0.58f);
+                const float a   = 0.15f + amp * 0.85f;
 
                 const size_t vi   = (static_cast<size_t>(i) + 1) * 6;
                 kal_data_[vi + 0] = r * ca;
