@@ -16,7 +16,7 @@ An audio visualiser for Linux that runs as a live desktop wallpaper on X11. My m
 - 0 heap allocations
 - Lock free SPSC ring buffer
 - Custom FFT
-- Cycles between 5 visual modes dynamically or by pressing "m"
+- Cycles between 8 visual modes dynamically or by pressing "m"
 - Runs as a desktop wallpaper on X11 and XWayland
 
 ## How it works
