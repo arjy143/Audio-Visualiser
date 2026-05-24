@@ -1,3 +1,4 @@
 *.md
 .claude
 build/
+.perf-lens/

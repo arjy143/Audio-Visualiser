@@ -105,7 +105,7 @@ void FFTPlan::compute(std::span<const float> in, std::span<float> out) noexcept
     // 🧠 Concept: 20·log10(|x|/n) = (10/log₂10) · (log₂(r²+i²) − 2·log₂n)
     // This avoids one sqrt (inside std::abs) and one log10 per bin.
     // fast_log2 cuts the remaining log cost to ~5 integer ops via the exponent field.
-    constexpr float k_floor = -90.0f;
+    const float k_floor = -90.0f;
     constexpr float k_coeff = 10.0f / 3.32192809f;  // 10 / log₂(10)
     for (size_t k = 0; k < out.size(); ++k)
     {
